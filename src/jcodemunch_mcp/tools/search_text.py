@@ -1,9 +1,10 @@
 """Full-text search across indexed file contents."""
 
+import os
 import time
 from typing import Optional
 
-from ..storage import IndexStore
+from ..storage import IndexStore, record_savings, estimate_savings, cost_avoided
 from ._utils import resolve_repo
 
 
@@ -81,6 +82,17 @@ def search_text(
 
     elapsed = (time.perf_counter() - start) * 1000
 
+    # Token savings: raw bytes of searched files vs matched lines returned
+    raw_bytes = 0
+    for file_path in files[:files_searched]:
+        try:
+            raw_bytes += os.path.getsize(content_dir / file_path)
+        except OSError:
+            pass
+    response_bytes = sum(len(m["text"].encode()) for m in matches)
+    tokens_saved = estimate_savings(raw_bytes, response_bytes)
+    total_saved = record_savings(tokens_saved)
+
     return {
         "repo": f"{owner}/{name}",
         "query": query,
@@ -90,5 +102,8 @@ def search_text(
             "timing_ms": round(elapsed, 1),
             "files_searched": files_searched,
             "truncated": len(matches) >= max_results,
+            "tokens_saved": tokens_saved,
+            "total_tokens_saved": total_saved,
+            **cost_avoided(tokens_saved, total_saved),
         },
     }

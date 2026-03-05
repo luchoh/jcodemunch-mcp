@@ -4,7 +4,7 @@ import os
 import time
 from typing import Optional
 
-from ..storage import IndexStore
+from ..storage import IndexStore, record_savings, estimate_savings, cost_avoided
 from ._utils import resolve_repo
 
 
@@ -53,6 +53,19 @@ def get_file_tree(
 
     elapsed = (time.perf_counter() - start) * 1000
 
+    # Token savings: sum of raw file sizes vs compact tree response
+    store2 = IndexStore(base_path=storage_path)
+    content_dir = store2._content_dir(owner, name)
+    raw_bytes = 0
+    for f in files:
+        try:
+            raw_bytes += os.path.getsize(content_dir / f)
+        except OSError:
+            pass
+    response_bytes = len(str(tree).encode())
+    tokens_saved = estimate_savings(raw_bytes, response_bytes)
+    total_saved = record_savings(tokens_saved)
+
     return {
         "repo": f"{owner}/{name}",
         "path_prefix": path_prefix,
@@ -60,6 +73,9 @@ def get_file_tree(
         "_meta": {
             "timing_ms": round(elapsed, 1),
             "file_count": len(files),
+            "tokens_saved": tokens_saved,
+            "total_tokens_saved": total_saved,
+            **cost_avoided(tokens_saved, total_saved),
         },
     }
 
