@@ -30,6 +30,15 @@ All notable changes to jcodemunch-mcp are documented here.
   - dbt directives extracted as symbols: `{% macro %}`, `{% test %}`, `{% snapshot %}`, `{% materialization %}`
   - Docstrings from preceding `--` comments and `{# #}` Jinja block comments
   - 27 new tests covering DDL, CTEs, Jinja preprocessing, and all dbt directive types
+- **Context provider framework** — extensible plugin system for enriching indexes with business metadata from ecosystem tools. Providers auto-detect their tool during `index_folder`, load metadata from project config files, and inject descriptions, tags, and properties into AI summaries, file summaries, and search keywords. Zero configuration required.
+- **dbt context provider** — the first built-in provider. Auto-detects `dbt_project.yml`, parses `{% docs %}` blocks and `schema.yml` files, and enriches symbols with model descriptions, tags, and column metadata.
+- `context_enrichment` key in `index_folder` response reports stats from all active providers
+- New optional dependency: `pip install jcodemunch-mcp[dbt]` for schema.yml parsing (pyyaml)
+- `CONTEXT_PROVIDERS.md` documentation covering architecture, dbt provider details, and guide for writing new providers
+- 58 new tests covering the context provider framework, dbt provider, and file summary integration
+
+### Fixed
+- `test_respects_env_file_limit` now uses `JCODEMUNCH_MAX_FOLDER_FILES` (the correct higher-priority env var) instead of the legacy `JCODEMUNCH_MAX_INDEX_FILES`
 
 ## [1.2.5] - 2026-03-08
 

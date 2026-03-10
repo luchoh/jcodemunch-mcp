@@ -15,6 +15,7 @@ import pathspec
 logger = logging.getLogger(__name__)
 
 from ..parser import parse_file, LANGUAGE_EXTENSIONS, get_language_for_path
+from ..parser.context import discover_providers, enrich_symbols, ContextProvider
 from ..summarizer import generate_file_summaries
 from ..security import (
     validate_path,
@@ -129,9 +130,24 @@ def _language_counts(file_languages: dict[str, str]) -> dict[str, int]:
 def _complete_file_summaries(
     file_paths: list[str],
     symbols_by_file: dict[str, list],
+    context_providers: Optional[list[ContextProvider]] = None,
 ) -> dict[str, str]:
     """Generate file summaries and include empty entries for no-symbol files."""
-    generated = generate_file_summaries(dict(symbols_by_file))
+    providers = context_providers or []
+    generated = generate_file_summaries(dict(symbols_by_file), context_providers=providers)
+
+    # For files with no symbols but with provider metadata, generate context-only summary
+    if providers:
+        for file_path in file_paths:
+            if file_path not in generated or not generated.get(file_path):
+                for provider in providers:
+                    ctx = provider.get_file_context(file_path)
+                    if ctx is not None:
+                        summary = ctx.file_summary()
+                        if summary:
+                            generated[file_path] = summary
+                            break
+
     return {file_path: generated.get(file_path, "") for file_path in file_paths}
 
 
@@ -294,6 +310,7 @@ def index_folder(
     extra_ignore_patterns: Optional[list[str]] = None,
     follow_symlinks: bool = False,
     incremental: bool = True,
+    context_providers: bool = True,
 ) -> dict:
     """Index a local folder containing source code.
 
@@ -303,6 +320,8 @@ def index_folder(
         storage_path: Custom storage path (default: ~/.code-index/).
         extra_ignore_patterns: Additional gitignore-style patterns to exclude.
         follow_symlinks: Whether to follow symlinks (default False for safety).
+        context_providers: Whether to run context providers (default True).
+            Set to False or set JCODEMUNCH_CONTEXT_PROVIDERS=0 to disable.
         incremental: When True and an existing index exists, only re-index changed files.
 
     Returns:
@@ -334,6 +353,13 @@ def index_folder(
 
         if not source_files:
             return {"success": False, "error": "No source files found"}
+
+        # Discover context providers (dbt, terraform, etc.)
+        _providers_enabled = context_providers and os.environ.get("JCODEMUNCH_CONTEXT_PROVIDERS", "1") != "0"
+        active_providers = discover_providers(folder_path) if _providers_enabled else []
+        if active_providers:
+            names = ", ".join(p.name for p in active_providers)
+            logger.info("Active context providers: %s", names)
 
         # Create repo identifier from folder path
         repo_name = _local_repo_name(folder_path)
@@ -418,13 +444,17 @@ def index_folder(
                 len(incremental_no_symbols),
             )
 
+            # Enrich with context providers before summarization
+            if active_providers:
+                enrich_symbols(new_symbols, active_providers)
+
             new_symbols = summarize_symbols(new_symbols, use_ai=use_ai_summaries)
 
             # Generate file summaries for changed/new files
             incr_symbols_map = defaultdict(list)
             for s in new_symbols:
                 incr_symbols_map[s.file].append(s)
-            incr_file_summaries = _complete_file_summaries(sorted(files_to_parse), incr_symbols_map)
+            incr_file_summaries = _complete_file_summaries(sorted(files_to_parse), incr_symbols_map, context_providers=active_providers)
             incr_file_languages = _file_languages_for_paths(sorted(files_to_parse), incr_symbols_map)
 
             git_head = _get_git_head(folder_path) or ""
@@ -486,6 +516,10 @@ def index_folder(
             len(no_symbols_files),
         )
 
+        # Enrich with context providers before summarization
+        if active_providers and all_symbols:
+            enrich_symbols(all_symbols, active_providers)
+
         # Generate summaries
         if all_symbols:
             all_symbols = summarize_symbols(all_symbols, use_ai=use_ai_summaries)
@@ -496,7 +530,7 @@ def index_folder(
             file_symbols_map[s.file].append(s)
         file_languages = _file_languages_for_paths(source_file_list, file_symbols_map)
         languages = _language_counts(file_languages)
-        file_summaries = _complete_file_summaries(source_file_list, file_symbols_map)
+        file_summaries = _complete_file_summaries(source_file_list, file_symbols_map, context_providers=active_providers)
 
         # Save index
         # Track hashes for all discovered source files so incremental change detection
@@ -535,6 +569,13 @@ def index_folder(
             "no_symbols_count": len(no_symbols_files),
             "no_symbols_files": no_symbols_files[:50],  # Show up to 50 for inspection
         }
+
+        # Report context enrichment stats from all active providers
+        if active_providers:
+            enrichment = {}
+            for provider in active_providers:
+                enrichment[provider.name] = provider.stats()
+            result["context_enrichment"] = enrichment
 
         if warnings:
             result["warnings"] = warnings
