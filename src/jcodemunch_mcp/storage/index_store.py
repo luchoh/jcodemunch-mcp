@@ -94,7 +94,7 @@ class CodeIndex:
 
     def has_source_file(self, file_path: str) -> bool:
         """Check whether a file is present in the index."""
-        return not self.source_files or file_path in self._source_file_set
+        return file_path in self._source_file_set
 
     def search(self, query: str, kind: Optional[str] = None, file_pattern: Optional[str] = None, limit: int = 0) -> list[dict]:
         """Search symbols with weighted scoring.
@@ -243,6 +243,41 @@ class IndexStore:
     def _meta_path(self, owner: str, name: str) -> Path:
         """Path to lightweight metadata sidecar for list_repos."""
         return self.base_path / f"{self._repo_slug(owner, name)}.meta.json"
+
+    def _checksum_path(self, index_path: Path) -> Path:
+        """Path to SHA-256 integrity checksum sidecar."""
+        return index_path.with_suffix(".json.sha256")
+
+    def _write_checksum(self, index_path: Path, index_bytes: bytes) -> None:
+        """Write SHA-256 checksum sidecar for index integrity verification."""
+        sha = hashlib.sha256(index_bytes).hexdigest()
+        try:
+            self._checksum_path(index_path).write_text(sha, encoding="utf-8")
+        except Exception:
+            logger.debug("Failed to write checksum sidecar for %s", index_path, exc_info=True)
+
+    def _verify_checksum(self, index_path: Path) -> bool:
+        """Verify index file against its SHA-256 checksum sidecar.
+
+        Returns True if no sidecar exists (backwards-compatible) or checksum matches.
+        Logs a warning on mismatch but still returns True (non-blocking).
+        """
+        sha_path = self._checksum_path(index_path)
+        if not sha_path.exists():
+            return True  # No sidecar — old index, skip check
+        try:
+            expected = sha_path.read_text(encoding="utf-8").strip()
+            actual = hashlib.sha256(index_path.read_bytes()).hexdigest()
+            if actual != expected:
+                logger.warning(
+                    "Index integrity check failed for %s — expected %s, got %s. "
+                    "The index may have been modified externally. Re-index to fix.",
+                    index_path, expected[:12], actual[:12],
+                )
+            return True
+        except Exception:
+            logger.debug("Checksum verification error for %s", index_path, exc_info=True)
+            return True  # Err on the side of loading
 
     def _write_meta_sidecar(self, index: "CodeIndex") -> None:
         """Write a small metadata sidecar alongside the full index."""
@@ -407,14 +442,18 @@ class IndexStore:
         # Lock, write index + raw files atomically
         index_path = self._index_path(owner, name)
         with FileLock(str(self._lock_path(owner, name))):
+            index_json_bytes = json.dumps(self._index_to_dict(index), indent=2).encode("utf-8")
             fd, tmp_name = tempfile.mkstemp(dir=index_path.parent, suffix=".json.tmp")
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(self._index_to_dict(index), f, indent=2)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(index_json_bytes)
                 Path(tmp_name).replace(index_path)
             except Exception:
                 Path(tmp_name).unlink(missing_ok=True)
                 raise
+
+            # Write integrity checksum sidecar
+            self._write_checksum(index_path, index_json_bytes)
 
             # Save raw files
             content_dir = self._content_dir(owner, name)
@@ -447,9 +486,21 @@ class IndexStore:
         if not index_path.exists():
             return None
 
+        # Integrity checksum verification
+        if not self._verify_checksum(index_path):
+            return None
+
         mtime_ns = index_path.stat().st_mtime_ns
         data = _load_index_json_cached(str(index_path), mtime_ns)
         if data is None:
+            return None
+
+        # Schema validation: require essential fields
+        if not isinstance(data, dict) or "indexed_at" not in data:
+            logger.warning(
+                "Index schema validation failed for %s/%s — missing required fields; re-index to fix",
+                owner, name,
+            )
             return None
 
         # Version check
@@ -699,14 +750,18 @@ class IndexStore:
 
             # Save atomically: unpredictable temp file prevents symlink attacks
             index_path = self._index_path(owner, name)
+            index_json_bytes = json.dumps(self._index_to_dict(updated), indent=2).encode("utf-8")
             fd, tmp_name = tempfile.mkstemp(dir=index_path.parent, suffix=".json.tmp")
             try:
-                with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    json.dump(self._index_to_dict(updated), f, indent=2)
+                with os.fdopen(fd, "wb") as f:
+                    f.write(index_json_bytes)
                 Path(tmp_name).replace(index_path)
             except Exception:
                 Path(tmp_name).unlink(missing_ok=True)
                 raise
+
+            # Write integrity checksum sidecar
+            self._write_checksum(index_path, index_json_bytes)
 
             # Update raw files
             content_dir = self._content_dir(owner, name)
@@ -761,7 +816,10 @@ class IndexStore:
         if data.get("display_name"):
             repo_entry["display_name"] = data["display_name"]
         if data.get("source_root"):
-            repo_entry["source_root"] = data["source_root"]
+            if os.environ.get("JCODEMUNCH_REDACT_SOURCE_ROOT", "") == "1":
+                repo_entry["source_root"] = data.get("display_name", "") or ""
+            else:
+                repo_entry["source_root"] = data["source_root"]
         return repo_entry
 
     def list_repos(self) -> list[dict]:

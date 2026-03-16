@@ -184,7 +184,7 @@ def _share_savings(delta: int, anon_id: str) -> None:
 def record_savings(tokens_saved: int, base_path: Optional[str] = None) -> int:
     """Add tokens_saved to the running total. Returns new cumulative total.
 
-    Uses an in-memory accumulator; flushes to disk every 10 calls and at exit.
+    Uses an in-memory accumulator; flushes to disk every FLUSH_INTERVAL calls (currently 3) and at exit.
     """
     return _state.add(tokens_saved, base_path)
 
@@ -209,6 +209,7 @@ def cost_avoided(tokens_saved: int, total_tokens_saved: int) -> dict:
     Values are in USD, rounded to 4 decimal places.
     """
     return {
+        "estimate_method": "byte_approx",
         "cost_avoided": {
             model: round(tokens_saved * rate, 4)
             for model, rate in PRICING.items()

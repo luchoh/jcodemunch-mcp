@@ -3,9 +3,9 @@
 See also: `C:\MCPs\CLAUDE.md` for universal workflow and shell conventions.
 
 ## Current State
-- **Version:** 1.5.0 (published to PyPI)
+- **Version:** 1.5.1 (published to PyPI)
 - **INDEX_VERSION:** 4
-- **Tests:** 599 passed, 4 skipped
+- **Tests:** 604 passed, 4 skipped
 - **Python:** >=3.10
 
 ## Key Files
@@ -84,6 +84,8 @@ Custom parsers (tree-sitter grammar lacks clean named fields):
 | `OPENAI_BATCH_SIZE` | 10 | Symbols per summarization request |
 | `OPENAI_CONCURRENCY` | 1 | Parallel batch requests to local LLM |
 | `OPENAI_MAX_TOKENS` | 500 | Max output tokens per batch |
+| `JCODEMUNCH_HTTP_TOKEN` | — | Bearer token for HTTP transport auth (opt-in) |
+| `JCODEMUNCH_REDACT_SOURCE_ROOT` | 0 | Set 1 to replace source_root with display_name in responses |
 
 ## Summarizer Priority
 1. `ANTHROPIC_API_KEY` → Claude Haiku (`pip install jcodemunch-mcp[anthropic]`)
@@ -171,8 +173,18 @@ None — queue is clear as of 2026-03-12.
 | 1.2.9–1.2.12 | Various fixes (see git log) |
 | 1.3.0 | find_importers + find_references tools: regex import extraction for 19 languages, import graph persisted in index, resolve_specifier for relative path resolution |
 | 1.3.1 | HTTP transport modes: --transport sse/streamable-http, --host, --port; also JCODEMUNCH_TRANSPORT/HOST/PORT env vars; default 127.0.0.1:8901 |
-| 1.5.0 | Hardening release: ReDoS protection, symlink-safe temp files, cross-process file locking, bounded heap search, metadata sidecars, LRU index cache, SSRF prevention, streaming file indexing, consolidated skip patterns, BaseSummarizer dedup, exception logging, search_columns + get_context_bundle tests |
-| 1.4.4 | Assembly language support (WLA-DX, NASM, GAS, CA65): labels, sections, macros, constants, structs, enums, .proc, imports — contributed by astrobleem (PR #105) |
-| 1.4.3 | Fix cross-process savings loss: token_tracker _flush_locked now writes additive delta instead of overwriting with in-process total — reported in PR #103 |
-| 1.4.2 | XML: extract name/key identity attributes as symbols (alongside id); qualified_name encodes tag::value (e.g. block::foundationConcrete) — closes #102 |
 | 1.3.2 | search_text: is_regex=true for full regex (alternation, patterns); improved context_lines description (grep -C analogy); get_file_outline accepts 'file' alias for 'file_path' |
+| 1.4.2 | XML: extract name/key identity attributes as symbols (alongside id); qualified_name encodes tag::value (e.g. block::foundationConcrete) — closes #102 |
+| 1.4.3 | Fix cross-process savings loss: token_tracker _flush_locked now writes additive delta instead of overwriting with in-process total — reported in PR #103 |
+| 1.4.4 | Assembly language support (WLA-DX, NASM, GAS, CA65): labels, sections, macros, constants, structs, enums, .proc, imports — contributed by astrobleem (PR #105) |
+| 1.5.0 | Hardening release: ReDoS protection, symlink-safe temp files, cross-process file locking, bounded heap search, metadata sidecars, LRU index cache, SSRF prevention, streaming file indexing, consolidated skip patterns, BaseSummarizer dedup, exception logging, search_columns + get_context_bundle tests |
+
+## Maintenance Practices
+
+1. **Document every tool before shipping.** Any PR adding a new tool to `server.py`
+   must simultaneously update: README.md (tool reference), CLAUDE.md (Key Files),
+   version history, and at least one test.
+2. **Log every silent exception.** Every `except Exception:` block must emit at
+   minimum `logger.debug("...", exc_info=True)`. For user-facing fallbacks (AI
+   summarizer, index load), use `logger.warning(...)`.
+3. **Version history goes at the bottom** in ascending order (oldest first, newest last).

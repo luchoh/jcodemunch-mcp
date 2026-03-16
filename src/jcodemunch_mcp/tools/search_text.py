@@ -96,10 +96,6 @@ def search_text(
             continue
 
         files_searched += 1
-        try:
-            raw_bytes += os.path.getsize(full_path)
-        except OSError:
-            pass
         lines = content.split("\n")
         file_matches = []
         for line_index, line in enumerate(lines):
@@ -122,6 +118,10 @@ def search_text(
 
         if file_matches:
             results.append({"file": file_path, "matches": file_matches})
+            try:
+                raw_bytes += os.path.getsize(full_path)
+            except OSError:
+                pass
 
         if truncated:
             break
