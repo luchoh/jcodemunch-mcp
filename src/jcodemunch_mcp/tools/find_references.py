@@ -8,39 +8,15 @@ from ..storage import IndexStore
 from ._utils import resolve_repo
 
 
-def find_references(
-    repo: str,
+def _find_references_single(
     identifier: str,
-    max_results: int = 50,
-    storage_path: Optional[str] = None,
+    index,
+    max_results: int,
+    owner: str,
+    name: str,
+    start: float,
 ) -> dict:
-    """Find all indexed files that import or reference an identifier.
-
-    Searches import names and specifier stems for the identifier.  For
-    deeper usage-site matching use search_text.
-
-    Args:
-        repo: Repository identifier (owner/repo or display name).
-        identifier: The symbol/module name to look for (e.g. 'bulkImport', 'IntakeService').
-        max_results: Maximum number of results.
-        storage_path: Custom storage path.
-
-    Returns:
-        Dict with references list and _meta envelope.
-    """
-    start = time.perf_counter()
-    max_results = max(1, min(max_results, 200))
-
-    try:
-        owner, name = resolve_repo(repo, storage_path)
-    except ValueError as e:
-        return {"error": str(e)}
-
-    store = IndexStore(base_path=storage_path)
-    index = store.load_index(owner, name)
-    if not index:
-        return {"error": f"Repository not indexed: {owner}/{name}"}
-
+    """Core logic for a single identifier query. Returns the original flat shape."""
     if index.imports is None:
         return {
             "repo": f"{owner}/{name}",
@@ -84,6 +60,117 @@ def find_references(
         "_meta": {
             "timing_ms": round(elapsed, 1),
             "truncated": len(results) > max_results,
-            "tip": "For usage-site matching beyond imports, also try search_text.",
+            "tip": "Tip: use identifiers=[...] to query multiple identifiers in one call. "
+                   "For usage-site matching beyond imports, also try search_text or check_references.",
         },
     }
+
+
+def _find_references_batch(
+    identifiers: list[str],
+    index,
+    max_results: int,
+    owner: str,
+    name: str,
+    start: float,
+) -> dict:
+    """Batch logic: loop over identifiers, return grouped results array."""
+    if index.imports is None:
+        return {
+            "repo": f"{owner}/{name}",
+            "results": [
+                {
+                    "identifier": ident,
+                    "references": [],
+                    "note": "No import data available. Re-index with jcodemunch-mcp >= 1.3.0 to enable find_references.",
+                }
+                for ident in identifiers
+            ],
+            "_meta": {"timing_ms": round((time.perf_counter() - start) * 1000, 1)},
+        }
+
+    # Pre-compute lowercased query identifiers for Bug C fix
+    query_stems = {ident.lower() for ident in identifiers}
+
+    # Build reverse map: identifier_lower -> dict of file -> entry (deduped per file, Bug B fix)
+    # Only populate spec_stem when it matches a query identifier (Bug C fix)
+    # First-match-wins on match_type: batch path is flat (no per-import matches array like
+    # the single path), so we can't expose both match types meaningfully; "named" takes
+    # priority since it represents a more specific import name match.
+    ident_map: dict[str, dict[str, dict]] = {}
+    for src_file, file_imports in index.imports.items():
+        for imp in file_imports:
+            for name_or_stem in imp.get("names", []):
+                key = name_or_stem.lower()
+                if src_file not in ident_map.get(key, {}):
+                    ident_map.setdefault(key, {})[src_file] = {"file": src_file, "specifier": imp["specifier"], "match_type": "named"}
+            spec_stem = posixpath.splitext(posixpath.basename(imp["specifier"]))[0].lower()
+            if spec_stem in query_stems and src_file not in ident_map.get(spec_stem, {}):
+                ident_map.setdefault(spec_stem, {})[src_file] = {"file": src_file, "specifier": imp["specifier"], "match_type": "specifier_stem"}
+
+    results = []
+    for identifier in identifiers:
+        ident_lower = identifier.lower()
+        file_results = list(ident_map.get(ident_lower, {}).values())
+        file_results.sort(key=lambda r: r["file"])
+        results.append({
+            "identifier": identifier,
+            "reference_count": len(file_results),
+            "references": file_results[:max_results],
+        })
+
+    return {
+        "repo": f"{owner}/{name}",
+        "results": results,
+        "_meta": {"timing_ms": round((time.perf_counter() - start) * 1000, 1)},
+    }
+
+
+def find_references(
+    repo: str,
+    identifier: Optional[str] = None,
+    max_results: int = 50,
+    storage_path: Optional[str] = None,
+    identifiers: Optional[list[str]] = None,
+) -> dict:
+    """Find all indexed files that import or reference an identifier.
+
+    Supports two modes:
+    - Singular: pass ``identifier`` to get the original flat response shape.
+    - Batch: pass ``identifiers`` (list) to query multiple identifiers at once,
+      returning a grouped ``results`` array.
+
+    Args:
+        repo: Repository identifier (owner/repo or display name).
+        identifier: The symbol/module name to look for (singular mode, e.g. 'bulkImport').
+        max_results: Maximum number of results.
+        storage_path: Custom storage path.
+        identifiers: List of symbol/module names to look for (batch mode).
+
+    Returns:
+        Singular mode: dict with flat ``references`` list and _meta envelope.
+        Batch mode: dict with ``results`` array (one entry per input identifier).
+
+    Raises:
+        ValueError: if neither or both of identifier and identifiers are provided.
+    """
+    if (identifier is None and identifiers is None) or (identifier is not None and identifiers is not None):
+        raise ValueError("Provide exactly one of 'identifier' or 'identifiers', not both and not neither.")
+
+    start = time.perf_counter()
+    max_results = max(1, min(max_results, 200))
+
+    try:
+        owner, name = resolve_repo(repo, storage_path)
+    except ValueError as e:
+        return {"error": str(e)}
+
+    store = IndexStore(base_path=storage_path)
+    index = store.load_index(owner, name)
+    if not index:
+        return {"error": f"Repository not indexed: {owner}/{name}"}
+
+    if identifiers is not None:
+        return _find_references_batch(identifiers, index, max_results, owner, name, start)
+    else:
+        return _find_references_single(identifier, index, max_results, owner, name, start)

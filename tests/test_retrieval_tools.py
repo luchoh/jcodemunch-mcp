@@ -1,11 +1,13 @@
 """Tests for repository-wide retrieval tools."""
 
 import json
+import pytest
 from datetime import datetime, timedelta, timezone
 
 from jcodemunch_mcp.parser import Symbol
 from jcodemunch_mcp.storage import IndexStore
 from jcodemunch_mcp.tools.get_file_content import get_file_content
+from jcodemunch_mcp.tools.index_folder import index_folder
 from jcodemunch_mcp.tools.get_file_outline import get_file_outline
 from jcodemunch_mcp.tools.get_repo_outline import get_repo_outline
 from jcodemunch_mcp.tools.search_text import search_text
@@ -259,3 +261,53 @@ def test_get_file_content_reports_missing_cached_file(tmp_path):
     result = get_file_content("retrieval/demo", "src/main.py", storage_path=str(tmp_path))
 
     assert result["error"] == "File content not found: src/main.py"
+
+
+def test_get_file_outline_batch(tmp_path):
+    """get_file_outline with file_paths returns multiple outlines."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("def foo(): pass")
+    (src / "b.py").write_text("def bar(): pass")
+
+    from jcodemunch_mcp.tools.index_folder import index_folder
+    idx = index_folder(path=str(tmp_path), use_ai_summaries=False, storage_path=str(tmp_path / "idx"))
+    repo = idx["repo"]
+
+    from jcodemunch_mcp.tools.get_file_outline import get_file_outline
+    result = get_file_outline(repo=repo, file_paths=["src/a.py", "src/b.py"], storage_path=str(tmp_path / "idx"))
+    assert "results" in result
+    assert len(result["results"]) == 2
+    files = [r["file"] for r in result["results"]]
+    assert "src/a.py" in files
+    assert "src/b.py" in files
+
+
+def test_get_file_outline_batch_empty_list(tmp_path):
+    """Empty file_paths list returns empty results."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("def foo(): pass")
+    idx = index_folder(path=str(tmp_path), use_ai_summaries=False, storage_path=str(tmp_path / "idx"))
+    repo = idx["repo"]
+
+    result = get_file_outline(repo=repo, file_paths=[], storage_path=str(tmp_path / "idx"))
+    assert result["results"] == []
+
+
+def test_get_file_outline_both_params_raises(tmp_path):
+    """Passing both file_path and file_paths raises ValueError."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "a.py").write_text("def foo(): pass")
+    idx = index_folder(path=str(tmp_path), use_ai_summaries=False, storage_path=str(tmp_path / "idx"))
+    repo = idx["repo"]
+
+    from jcodemunch_mcp.tools.get_file_outline import get_file_outline
+    with pytest.raises(ValueError):
+        get_file_outline(
+            repo=repo,
+            file_path="src/a.py",
+            file_paths=["src/a.py"],
+            storage_path=str(tmp_path / "idx"),
+        )

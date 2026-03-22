@@ -29,6 +29,7 @@ from .tools.search_text import search_text
 from .tools.get_repo_outline import get_repo_outline
 from .tools.find_importers import find_importers
 from .tools.find_references import find_references
+from .tools.check_references import check_references
 from .tools.get_session_stats import get_session_stats
 from .tools.get_dependency_graph import get_dependency_graph
 from .tools.get_blast_radius import get_blast_radius
@@ -277,9 +278,14 @@ async def list_tools() -> list[Tool]:
                     "file_path": {
                         "type": "string",
                         "description": "Path to the file within the repository (e.g., 'src/main.py')"
+                    },
+                    "file_paths": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of file paths to query in batch mode. Returns a grouped results array."
                     }
                 },
-                "required": ["repo", "file_path"]
+                "required": ["repo"]
             }
         ),
         Tool(
@@ -474,28 +480,54 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="find_importers",
-            description="Find all files that import from a given file path. Answers 'what uses this file?'. Each result includes has_importers (bool) indicating whether that importer is itself imported — use this to detect transitive dead code chains (an importer with has_importers=false is itself unreachable). For dbt, resolves {{ ref() }} edges; {{ source() }} edges are extracted but not resolvable to files since sources are external. Requires re-indexing with v1.3.0+.",
+            description="Find all files that import from a given file path. Answers 'what uses this file?'. Each result includes has_importers (bool) indicating whether that importer is itself imported — use this to detect transitive dead code chains (an importer with has_importers=false is itself unreachable). For dbt, resolves {{ ref() }} edges; {{ source() }} edges are extracted but not resolvable to files since sources are external. Requires re-indexing with v1.3.0+. Use file_paths for batch queries across multiple files.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "repo": {"type": "string", "description": "Repository identifier"},
-                    "file_path": {"type": "string", "description": "Target file path within the repo (e.g. 'src/features/intake/IntakeService.js')"},
-                    "max_results": {"type": "integer", "default": 50, "description": "Maximum results"},
+                    "file_path": {"type": "string", "description": "Target file path within the repo (e.g. 'src/features/intake/IntakeService.js'). Use for single-file queries. Cannot be used together with file_paths."},
+                    "file_paths": {"type": "array", "items": {"type": "string"}, "description": "List of target file paths for batch queries. Returns a results array. Cannot be used together with file_path."},
+                    "max_results": {"type": "integer", "default": 50, "description": "Maximum results per file"},
                 },
-                "required": ["repo", "file_path"],
+                "required": ["repo"],
             },
         ),
         Tool(
             name="find_references",
-            description="Find all files that import or reference a given identifier (symbol name, module name, or class name). Answers 'where is this used?'. For dbt, traces {{ ref() }} edges; {{ source() }} specifiers are extracted but not resolvable since sources are external. Requires re-indexing with v1.3.0+.",
+            description="Find all files that import or reference a given identifier (symbol name, module name, or class name). Answers 'where is this used?'. For dbt, traces {{ ref() }} edges; {{ source() }} specifiers are extracted but not resolvable since sources are external. Requires re-indexing with v1.3.0+. Use identifiers for batch queries across multiple identifiers.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "repo": {"type": "string", "description": "Repository identifier"},
-                    "identifier": {"type": "string", "description": "Symbol or module name to search for (e.g. 'bulkImport', 'IntakeService')"},
+                    "identifier": {"type": "string", "description": "Symbol or module name to search for (e.g. 'bulkImport', 'IntakeService'). Use for single-identifier queries. Cannot be used together with identifiers."},
+                    "identifiers": {"type": "array", "items": {"type": "string"}, "description": "List of symbol or module names to search for (batch mode). Returns a results array. Cannot be used together with identifier."},
                     "max_results": {"type": "integer", "default": 50, "description": "Maximum results"},
                 },
-                "required": ["repo", "identifier"],
+                "required": ["repo"],
+            },
+        ),
+        Tool(
+            name="check_references",
+            description="Check if an identifier is referenced anywhere: imports + file content. Combines find_references and search_text into one call. Returns is_referenced (bool) for quick dead-code detection. Accepts multiple identifiers in one call via identifiers param.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository identifier"},
+                    "identifier": {"type": "string", "description": "Single identifier to check"},
+                    "identifiers": {
+                        "type": "array", "items": {"type": "string"},
+                        "description": "Multiple identifiers to check in one call. Returns grouped results.",
+                    },
+                    "search_content": {
+                        "type": "boolean", "default": True,
+                        "description": "Also search file contents (not just imports). Set false for fast import-only check.",
+                    },
+                    "max_content_results": {
+                        "type": "integer", "default": 20,
+                        "description": "Max files to return per identifier for content search.",
+                    },
+                },
+                "required": ["repo"],
             },
         ),
         Tool(
@@ -750,7 +782,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 functools.partial(
                     get_file_outline,
                     repo=arguments["repo"],
-                    file_path=arguments.get("file_path") or arguments["file"],
+                    file_path=arguments.get("file_path") or arguments.get("file"),
+                    file_paths=arguments.get("file_paths"),
                     storage_path=storage_path,
                 )
             )
@@ -839,7 +872,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 functools.partial(
                     find_importers,
                     repo=arguments["repo"],
-                    file_path=arguments["file_path"],
+                    file_path=arguments.get("file_path"),
+                    file_paths=arguments.get("file_paths"),
                     max_results=arguments.get("max_results", 50),
                     storage_path=storage_path,
                 )
@@ -849,8 +883,21 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                 functools.partial(
                     find_references,
                     repo=arguments["repo"],
-                    identifier=arguments["identifier"],
+                    identifier=arguments.get("identifier"),
+                    identifiers=arguments.get("identifiers"),
                     max_results=arguments.get("max_results", 50),
+                    storage_path=storage_path,
+                )
+            )
+        elif name == "check_references":
+            result = await asyncio.to_thread(
+                functools.partial(
+                    check_references,
+                    repo=arguments["repo"],
+                    identifier=arguments.get("identifier"),
+                    identifiers=arguments.get("identifiers"),
+                    search_content=arguments.get("search_content", True),
+                    max_content_results=arguments.get("max_content_results", 20),
                     storage_path=storage_path,
                 )
             )

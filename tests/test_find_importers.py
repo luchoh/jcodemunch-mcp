@@ -534,6 +534,76 @@ class TestFindImporters:
         assert importers["_meta"]["truncated"] is True
 
 
+    def test_batch_file_paths(self, tmp_path):
+        """find_importers with file_paths returns grouped results."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        _write(src / "utils.js", "export function helper() {}")
+        _write(src / "config.js", "export const CONFIG = {}")
+        _write(src / "app.js", "import { helper } from './utils';\nimport { CONFIG } from './config';")
+
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        assert result["success"] is True
+
+        batch_result = find_importers(
+            repo=result["repo"],
+            file_paths=["utils.js", "config.js"],
+            storage_path=str(store),
+        )
+        assert "results" in batch_result
+        assert len(batch_result["results"]) == 2
+        paths = [r["file_path"] for r in batch_result["results"]]
+        assert "utils.js" in paths
+        assert "config.js" in paths
+
+    def test_batch_empty_list(self, tmp_path):
+        """Empty file_paths list returns empty results."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        _write(src / "app.js", "console.log('hi')")
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        assert result["success"] is True
+
+        batch_result = find_importers(repo=result["repo"], file_paths=[], storage_path=str(store))
+        assert batch_result["results"] == []
+
+    def test_singular_file_path_still_works(self, tmp_path):
+        """Existing singular file_path param still works (backward compat)."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        _write(src / "utils.js", "export function helper() {}")
+        _write(src / "app.js", "import { helper } from './utils';")
+
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        assert result["success"] is True
+
+        singular_result = find_importers(
+            repo=result["repo"],
+            file_path="utils.js",
+            storage_path=str(store),
+        )
+        # Original response shape: flat importers list, not nested results
+        assert "importers" in singular_result
+        assert "results" not in singular_result
+
+    def test_both_file_path_and_file_paths_raises(self, tmp_path):
+        """Passing both file_path and file_paths raises ValueError."""
+        src = tmp_path / "src"
+        src.mkdir()
+        _write(src / "utils.js", "export function helper() {}")
+        result = index_folder(path=str(tmp_path), use_ai_summaries=False, storage_path=str(tmp_path / "idx"))
+        repo = result["repo"]
+
+        from jcodemunch_mcp.tools.find_importers import find_importers
+        with pytest.raises(ValueError):
+            find_importers(
+                repo=repo,
+                file_path="utils.js",
+                file_paths=["utils.js"],
+                storage_path=str(tmp_path / "idx"),
+            )
+
+
 class TestFindReferences:
     """Integration tests for find_references."""
 
@@ -664,6 +734,69 @@ class TestFindReferences:
             storage_path=str(store),
         )
         assert "tip" in refs["_meta"]
+
+    def test_batch_identifiers(self, tmp_path):
+        """find_references with identifiers returns grouped results."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        _write(src / "utils.js", "export function helper() {}\nexport function format() {}")
+        _write(src / "app.js", "import { helper, format } from './utils';")
+
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        repo = result["repo"]
+
+        result = find_references(
+            repo=repo,
+            identifiers=["helper", "format"],
+            storage_path=str(store),
+        )
+        assert "results" in result
+        assert len(result["results"]) == 2
+        ids = [r["identifier"] for r in result["results"]]
+        assert "helper" in ids
+        assert "format" in ids
+
+    def test_singular_identifier_still_works(self, tmp_path):
+        """Existing singular identifier param still works (backward compat)."""
+        src = tmp_path / "src"
+        store = tmp_path / "store"
+        _write(src / "utils.js", "export function helper() {}")
+        _write(src / "app.js", "import { helper } from './utils';")
+
+        result = index_folder(str(src), use_ai_summaries=False, storage_path=str(store))
+        repo = result["repo"]
+
+        result = find_references(repo=repo, identifier="helper", storage_path=str(store))
+        assert "references" in result
+        assert "results" not in result
+
+    def test_batch_empty_list(self, tmp_path):
+        """Empty identifiers list returns empty results."""
+        src = tmp_path / "src"
+        src.mkdir()
+        _write(src / "app.js", "console.log('hi')")
+        result = index_folder(path=str(tmp_path), use_ai_summaries=False, storage_path=str(tmp_path / "idx"))
+        repo = result["repo"]
+
+        result = find_references(repo=repo, identifiers=[], storage_path=str(tmp_path / "idx"))
+        assert result["results"] == []
+
+    def test_both_identifier_and_identifiers_raises(self, tmp_path):
+        """Passing both identifier and identifiers raises ValueError."""
+        src = tmp_path / "src"
+        src.mkdir()
+        _write(src / "utils.js", "export function helper() {}")
+        result = index_folder(path=str(tmp_path), use_ai_summaries=False, storage_path=str(tmp_path / "idx"))
+        repo = result["repo"]
+
+        from jcodemunch_mcp.tools.find_references import find_references
+        with pytest.raises(ValueError):
+            find_references(
+                repo=repo,
+                identifier="helper",
+                identifiers=["helper"],
+                storage_path=str(tmp_path / "idx"),
+            )
 
 
 # ---------------------------------------------------------------------------
