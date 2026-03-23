@@ -157,3 +157,32 @@ def get(key: str, default: Any = None, repo: str | None = None) -> Any:
     if repo and repo in _PROJECT_CONFIGS:
         return _PROJECT_CONFIGS[repo].get(key, default)
     return _GLOBAL_CONFIG.get(key, default)
+
+
+def load_project_config(source_root: str) -> None:
+    """Load and cache .jcodemunch.jsonc for a project. Called on first index."""
+    project_config_path = Path(source_root) / ".jcodemunch.jsonc"
+    repo_key = str(Path(source_root).resolve())
+
+    if project_config_path.exists():
+        try:
+            content = project_config_path.read_text(encoding="utf-8")
+            stripped = _strip_jsonc(content)
+            project_config = json.loads(stripped)
+
+            # Merge over global
+            merged = {**_GLOBAL_CONFIG}
+            for key, value in project_config.items():
+                if key in CONFIG_TYPES:
+                    if _validate_type(key, value, CONFIG_TYPES[key]):
+                        merged[key] = value
+                    else:
+                        logger.warning(
+                            f"Project config key '{key}' has invalid type. Using global default."
+                        )
+            _PROJECT_CONFIGS[repo_key] = merged
+        except Exception as e:
+            logger.warning(f"Failed to load project config: {e}")
+            _PROJECT_CONFIGS[repo_key] = _GLOBAL_CONFIG.copy()
+    else:
+        _PROJECT_CONFIGS[repo_key] = _GLOBAL_CONFIG.copy()

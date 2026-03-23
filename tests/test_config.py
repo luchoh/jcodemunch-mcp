@@ -128,3 +128,39 @@ class TestConfigLoading:
 
             # Should use default
             assert get("max_folder_files") == 2000
+
+
+class TestProjectConfig:
+    """Test project-level config loading."""
+
+    def test_project_config_merges_over_global(self):
+        """Should merge project config over global config."""
+        from src.jcodemunch_mcp.config import (
+            load_config, load_project_config, get,
+            _GLOBAL_CONFIG, _PROJECT_CONFIGS
+        )
+
+        _GLOBAL_CONFIG.clear()
+        _PROJECT_CONFIGS.clear()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Set up global config
+            global_config = Path(tmpdir) / "global" / "config.jsonc"
+            global_config.parent.mkdir()
+            global_config.write_text('{"max_folder_files": 2000, "use_ai_summaries": true}')
+
+            load_config(str(global_config.parent))
+
+            # Set up project config
+            project_root = Path(tmpdir) / "project"
+            project_root.mkdir()
+            project_config = project_root / ".jcodemunch.jsonc"
+            project_config.write_text('{"max_folder_files": 5000}')
+
+            load_project_config(str(project_root))
+
+            # Project value should override
+            repo_key = str(project_root.resolve())
+            assert get("max_folder_files", repo=repo_key) == 5000
+            # Non-overridden values should come from global
+            assert get("use_ai_summaries", repo=repo_key) is True
