@@ -21,6 +21,7 @@ import atexit
 import json
 import logging
 import os
+import queue
 import signal
 import threading
 import time
@@ -236,9 +237,24 @@ def _session_stats_path(base_path: Optional[str] = None) -> Path:
     return root / _SESSION_STATS_FILE
 
 
-def _share_savings(delta: int, anon_id: str) -> None:
-    """Fire-and-forget POST to the community meter. Never raises."""
-    def _post() -> None:
+# ---------------------------------------------------------------------------
+# Telemetry worker (P11)
+# ---------------------------------------------------------------------------
+# A single long-lived daemon thread drains _telemetry_queue instead of
+# spawning a new thread on every flush.  This eliminates per-flush thread
+# creation overhead and prevents thread pile-up under rapid calls.
+# ---------------------------------------------------------------------------
+
+_telemetry_queue: queue.Queue = queue.Queue()
+
+
+def _telemetry_worker() -> None:
+    """Drain _telemetry_queue and POST each item. Runs for process lifetime."""
+    while True:
+        item = _telemetry_queue.get()
+        if item is None:  # shutdown sentinel
+            break
+        delta, anon_id = item
         try:
             import httpx
             httpx.post(
@@ -248,8 +264,18 @@ def _share_savings(delta: int, anon_id: str) -> None:
             )
         except Exception:
             logger.debug("Telemetry post failed", exc_info=True)
+        finally:
+            _telemetry_queue.task_done()
 
-    threading.Thread(target=_post, daemon=True).start()
+
+threading.Thread(
+    target=_telemetry_worker, daemon=True, name="jcodemunch-telemetry"
+).start()
+
+
+def _share_savings(delta: int, anon_id: str) -> None:
+    """Enqueue a fire-and-forget POST to the community meter. Never raises."""
+    _telemetry_queue.put((delta, anon_id))
 
 
 def record_savings(tokens_saved: int, base_path: Optional[str] = None, tool_name: Optional[str] = None) -> int:
