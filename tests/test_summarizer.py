@@ -484,15 +484,25 @@ def test_openai_summarizer_responses_partial_parse_falls_back_per_symbol():
 
 def test_openai_summarizer_remote_endpoint_requires_allow_flag():
     """Non-localhost OpenAI endpoints are ignored without the allow flag."""
-    with patch.dict(
-        "os.environ",
-        {
-            "OPENAI_API_BASE": "https://example.openai.azure.com/openai/v1",
-            "OPENAI_WIRE_API": "responses",
-        },
-        clear=True,
-    ):
-        summarizer = OpenAIBatchSummarizer()
+    from jcodemunch_mcp import config as _cfg_module
+    _sentinel = object()
+    _orig = _cfg_module._GLOBAL_CONFIG.get("allow_remote_summarizer", _sentinel)
+    try:
+        with patch.dict(
+            "os.environ",
+            {
+                "OPENAI_API_BASE": "https://example.openai.azure.com/openai/v1",
+                "OPENAI_WIRE_API": "responses",
+            },
+            clear=True,
+        ):
+            _cfg_module._GLOBAL_CONFIG["allow_remote_summarizer"] = False
+            summarizer = OpenAIBatchSummarizer()
+    finally:
+        if _orig is _sentinel:
+            _cfg_module._GLOBAL_CONFIG.pop("allow_remote_summarizer", None)
+        else:
+            _cfg_module._GLOBAL_CONFIG["allow_remote_summarizer"] = _orig
 
     assert summarizer.api_base is None
     assert summarizer.client is None
