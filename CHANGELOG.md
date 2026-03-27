@@ -4,6 +4,13 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.11.16] - 2026-03-27
+
+### Added
+- **Token-budgeted context assembly (Feature 5)** — two new capabilities:
+  - `get_context_bundle` gains `token_budget`, `budget_strategy`, and `include_budget_report` params. When `token_budget` is set, symbols are ranked and trimmed to fit. `budget_strategy` controls how: `most_relevant` (default) ranks by file import in-degree, `core_first` keeps the primary symbol first then ranks the rest by centrality, `compact` strips all source bodies and returns signatures only. `include_budget_report=true` adds a `budget_report` field showing `budget_tokens`, `used_tokens`, `included_symbols`, `excluded_symbols`, and `strategy`. Fully backward-compatible: all new params default to existing behavior.
+  - **New `get_ranked_context` tool** — standalone token-budgeted context assembler. Takes a `query` + `token_budget` (default 4000) and returns the best-fit symbols with their full source, greedy-packed by combined score. `strategy` controls ranking: `combined` (BM25 + PageRank weighted sum, default), `bm25` (pure text relevance), `centrality` (PageRank only). Optional `include_kinds` and `scope` params restrict the candidate set. Response includes per-item `relevance_score`, `centrality_score`, `combined_score`, `tokens`, and `source`. Token counting uses `len(text) // 4` heuristic with optional `tiktoken` upgrade (no hard dep). No new dependencies. 19 new tests.
+
 ## [1.11.15] - 2026-03-27
 
 ### Added

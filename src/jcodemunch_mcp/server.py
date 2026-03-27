@@ -45,6 +45,7 @@ from .tools.get_changed_symbols import get_changed_symbols
 from .tools.suggest_queries import suggest_queries
 from .tools.search_columns import search_columns
 from .tools.get_context_bundle import get_context_bundle
+from .tools.get_ranked_context import get_ranked_context
 from .parser.symbols import VALID_KINDS
 from .reindex_state import wait_for_fresh_result, get_reindex_status, await_freshness_if_strict
 from .path_map import ENV_VAR as _PATH_MAP_ENV_VAR
@@ -606,7 +607,11 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_context_bundle",
-            description="Get full source + imports for one or more symbols in one call. Multi-symbol bundles deduplicate shared imports. Set include_callers=true to also list files that import the symbol's file.",
+            description=(
+                "Get full source + imports for one or more symbols in one call. "
+                "Multi-symbol bundles deduplicate shared imports. "
+                "Set token_budget to cap response size; use budget_strategy to control what's kept."
+            ),
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -633,7 +638,26 @@ async def list_tools() -> list[Tool]:
                         "description": "'json' (default) or 'markdown' — markdown renders a paste-ready document with imports, docstrings, and source blocks.",
                         "enum": ["json", "markdown"],
                         "default": "json"
-                    }
+                    },
+                    "token_budget": {
+                        "type": "integer",
+                        "description": "Max tokens to return. When set, symbols are ranked and trimmed to fit. Uses budget_strategy to prioritize."
+                    },
+                    "budget_strategy": {
+                        "type": "string",
+                        "enum": ["most_relevant", "core_first", "compact"],
+                        "description": (
+                            "'most_relevant' (default) ranks by file centrality (import in-degree). "
+                            "'core_first' keeps the primary symbol first, ranks rest by centrality. "
+                            "'compact' strips source bodies — returns signatures only."
+                        ),
+                        "default": "most_relevant"
+                    },
+                    "include_budget_report": {
+                        "type": "boolean",
+                        "description": "When true, include a 'budget_report' field showing tokens used, symbols included/excluded, and strategy applied.",
+                        "default": False
+                    },
                 },
                 "required": ["repo"]
             }
@@ -849,6 +873,47 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["repo"],
+            },
+        ),
+        Tool(
+            name="get_ranked_context",
+            description=(
+                "Assemble the best-fit context for a query within a token budget. "
+                "Ranks all symbols by relevance (BM25) and/or centrality (PageRank), "
+                "loads source for the top candidates, and packs greedily until token_budget is exhausted. "
+                "Use when you want 'the best N tokens of context for this task' without specifying exact symbols."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository identifier (owner/repo or just repo name)"},
+                    "query": {"type": "string", "description": "Natural language or identifier describing the task (max 500 chars)"},
+                    "token_budget": {
+                        "type": "integer",
+                        "description": "Hard cap on returned tokens (default 4000).",
+                        "default": 4000,
+                    },
+                    "strategy": {
+                        "type": "string",
+                        "enum": ["combined", "bm25", "centrality"],
+                        "description": (
+                            "'combined' (default) = BM25 + PageRank weighted sum. "
+                            "'bm25' = pure text relevance. "
+                            "'centrality' = PageRank only, filtered to query-matching symbols."
+                        ),
+                        "default": "combined",
+                    },
+                    "include_kinds": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of symbol kinds to restrict results (e.g. ['class', 'function']).",
+                    },
+                    "scope": {
+                        "type": "string",
+                        "description": "Optional glob pattern to limit search to a subdirectory (e.g. 'src/core/*').",
+                    },
+                },
+                "required": ["repo", "query"],
             },
         ),
         Tool(
@@ -1186,6 +1251,22 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     symbol_ids=arguments.get("symbol_ids"),
                     include_callers=arguments.get("include_callers", False),
                     output_format=arguments.get("output_format", "json"),
+                    token_budget=arguments.get("token_budget"),
+                    budget_strategy=arguments.get("budget_strategy", "most_relevant"),
+                    include_budget_report=arguments.get("include_budget_report", False),
+                    storage_path=storage_path,
+                )
+            )
+        elif name == "get_ranked_context":
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_ranked_context,
+                    repo=arguments["repo"],
+                    query=arguments["query"],
+                    token_budget=arguments.get("token_budget", 4000),
+                    strategy=arguments.get("strategy", "combined"),
+                    include_kinds=arguments.get("include_kinds"),
+                    scope=arguments.get("scope"),
                     storage_path=storage_path,
                 )
             )
