@@ -48,7 +48,7 @@ from .tools.get_context_bundle import get_context_bundle
 from .tools.get_ranked_context import get_ranked_context
 from .tools.embed_repo import embed_repo
 from .parser.symbols import VALID_KINDS
-from .reindex_state import wait_for_fresh_result, get_reindex_status, await_freshness_if_strict
+from .reindex_state import await_freshness_if_strict
 from .path_map import ENV_VAR as _PATH_MAP_ENV_VAR
 
 try:
@@ -63,7 +63,6 @@ _EXCLUDED_FROM_STRICT = frozenset({
     "list_repos",
     "resolve_repo",
     "get_session_stats",
-    "wait_for_fresh",
     "index_repo",
     "index_folder",
     "index_file",
@@ -792,45 +791,6 @@ async def list_tools() -> list[Tool]:
             }
         ),
         Tool(
-            name="wait_for_fresh",
-            description="Wait for a repo's in-progress watcher reindex to finish, then return the fresh result. In strict freshness mode, blocks up to timeout_ms. In relaxed mode (default), returns immediately.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository identifier (owner/repo or just repo name)"
-                    },
-                    "timeout_ms": {
-                        "type": "integer",
-                        "description": "Maximum time to wait in milliseconds (default 500)",
-                        "default": 500
-                    }
-                },
-                "required": ["repo"]
-            }
-        ),
-        Tool(
-            name="check_freshness",
-            description=(
-                "Check whether a locally indexed repo is still fresh by comparing the "
-                "git HEAD SHA at index time to the current HEAD. Returns fresh (bool), "
-                "indexed_sha, current_sha, and commits_behind. Works only for repos "
-                "indexed with index_folder; for GitHub repos use index_repo (which "
-                "compares tree SHAs automatically)."
-            ),
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "repo": {
-                        "type": "string",
-                        "description": "Repo identifier — owner/repo, display name, or local path",
-                    },
-                },
-                "required": ["repo"],
-            },
-        ),
-        Tool(
             name="get_symbol_importance",
             description=(
                 "Return the most architecturally important symbols in a repo, ranked by "
@@ -1385,21 +1345,6 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     storage_path=storage_path,
                 )
             )
-        elif name == "wait_for_fresh":
-            result = await asyncio.to_thread(
-                wait_for_fresh_result,
-                repo=arguments["repo"],
-                timeout_ms=arguments.get("timeout_ms", 500),
-            )
-        elif name == "check_freshness":
-            from .tools.check_freshness import check_freshness
-            result = await asyncio.to_thread(
-                functools.partial(
-                    check_freshness,
-                    repo=arguments["repo"],
-                    storage_path=storage_path,
-                )
-            )
         elif name == "get_symbol_importance":
             result = await asyncio.to_thread(
                 functools.partial(
@@ -1452,49 +1397,15 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             meta_fields = config_module.get("meta_fields")
             if meta_fields == [] or arguments.get("suppress_meta"):
                 result.pop("_meta", None)
-            elif meta_fields is None:
-                _meta = result.setdefault("_meta", {})
-                # Inject staleness fields for per-repo tools
-                repo_arg = arguments.get("repo")
-                if repo_arg:
-                    # get_reindex_status returns spec fields: index_stale, reindex_in_progress,
-                    # stale_since_ms, and conditionally reindex_error / reindex_failures.
-                    _meta.update(get_reindex_status(repo_arg))
-                elif name not in ("list_repos", "resolve_repo", "get_session_stats", "index_repo", "index_folder"):
-                    # For non-repo tools, report global reindex activity
-                    from .reindex_state import is_any_reindex_in_progress
-                    any_in_progress = is_any_reindex_in_progress()
-                    _meta["index_stale"] = any_in_progress
-                    _meta["reindex_in_progress"] = any_in_progress
-                    _meta["stale_since_ms"] = None
             elif isinstance(meta_fields, list):
-                # Partial field inclusion - build _meta with only specified fields
-                # Save existing _meta (may contain tool-generated fields like timing_ms, tokens_saved)
+                # Partial field inclusion — keep only the fields listed in meta_fields,
+                # preserving tool-generated fields (timing_ms, tokens_saved, etc.)
                 existing_meta = result.pop("_meta", {})
                 _meta: dict[str, Any] = {}
                 if "powered_by" in meta_fields:
                     _meta["powered_by"] = "jcodemunch-mcp by jgravelle · https://github.com/jgravelle/jcodemunch-mcp"
-                repo_arg = arguments.get("repo")
-                if repo_arg:
-                    status = get_reindex_status(repo_arg)
-                    for field in meta_fields:
-                        if field in status:
-                            _meta[field] = status[field]
-                        elif field in existing_meta:
-                            _meta[field] = existing_meta[field]
-                elif name not in ("list_repos", "get_session_stats", "index_repo", "index_folder"):
-                    from .reindex_state import is_any_reindex_in_progress
-                    any_in_progress = is_any_reindex_in_progress()
-                    if "index_stale" in meta_fields:
-                        _meta["index_stale"] = any_in_progress
-                    if "reindex_in_progress" in meta_fields:
-                        _meta["reindex_in_progress"] = any_in_progress
-                    if "stale_since_ms" in meta_fields:
-                        _meta["stale_since_ms"] = None
-                # Preserve tool-generated fields (timing_ms, tokens_saved, candidates_scored)
-                # This runs for ALL tools, including list_repos, get_session_stats, etc.
                 for field in meta_fields:
-                    if field not in _meta and field in existing_meta:
+                    if field in existing_meta:
                         _meta[field] = existing_meta[field]
                 if _meta:
                     result["_meta"] = _meta
