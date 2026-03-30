@@ -58,6 +58,7 @@ ENV_VAR_MAPPING = {
     "JCODEMUNCH_LOG_FILE": "log_file",
     "JCODEMUNCH_PATH_MAP": "path_map",
     "JCODEMUNCH_TRUSTED_FOLDERS_ENV": "trusted_folders",
+    "JCODEMUNCH_CROSS_REPO_DEFAULT": "cross_repo_default",
 }
 
 
@@ -294,6 +295,7 @@ DEFAULTS = {
     "summarizer_max_failures": 3,
     "allow_remote_summarizer": False,
     "path_map": "",
+    "cross_repo_default": False,
 }
 
 CONFIG_TYPES = {
@@ -341,6 +343,7 @@ CONFIG_TYPES = {
     "summarizer_max_failures": int,
     "allow_remote_summarizer": bool,
     "path_map": str,
+    "cross_repo_default": bool,
     "version": str,
 }
 

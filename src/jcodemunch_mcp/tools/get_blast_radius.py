@@ -8,6 +8,7 @@ from typing import Optional
 from ..storage import IndexStore
 from ..parser.imports import resolve_specifier
 from ._utils import resolve_repo
+from .package_registry import extract_root_package_from_specifier
 
 
 def _build_reverse_adjacency(
@@ -72,6 +73,7 @@ def get_blast_radius(
     depth: int = 1,
     include_depth_scores: bool = False,
     storage_path: Optional[str] = None,
+    cross_repo: Optional[bool] = None,
 ) -> dict:
     """Find all files that would be affected if a symbol's signature or behaviour changed.
 
@@ -94,6 +96,11 @@ def get_blast_radius(
     """
     depth = max(1, min(depth, 3))
     start = time.perf_counter()
+
+    # Resolve cross_repo default from config if not explicitly provided
+    if cross_repo is None:
+        from .. import config as _cfg
+        cross_repo = bool(_cfg.get("cross_repo_default", False))
 
     try:
         owner, name = resolve_repo(repo, storage_path)
@@ -158,6 +165,40 @@ def get_blast_radius(
     confirmed.sort(key=lambda x: x["file"])
     potential.sort(key=lambda x: x["file"])
 
+    # Cross-repo: find other repos that import this repo's package
+    cross_repo_confirmed: list[dict] = []
+    if cross_repo:
+        try:
+            from .list_repos import list_repos
+            from .package_registry import build_package_registry
+            all_repos_data = list_repos(storage_path=storage_path).get("repos", [])
+            pkg_names = getattr(index, "package_names", []) or []
+            if pkg_names:
+                for repo_entry in all_repos_data:
+                    other_repo_id = repo_entry.get("repo", "")
+                    if not other_repo_id or other_repo_id == f"{owner}/{name}" or "/" not in other_repo_id:
+                        continue
+                    other_owner, other_name = other_repo_id.split("/", 1)
+                    other_index = store.load_index(other_owner, other_name)
+                    if not other_index or not other_index.imports:
+                        continue
+                    for src_file, file_imports in other_index.imports.items():
+                        for imp in file_imports:
+                            specifier = imp.get("specifier", "")
+                            lang = other_index.file_languages.get(src_file, "")
+                            root_pkg = extract_root_package_from_specifier(specifier, lang)
+                            if root_pkg and root_pkg in pkg_names:
+                                cross_repo_confirmed.append({
+                                    "file": src_file,
+                                    "cross_repo": True,
+                                    "source_repo": other_repo_id,
+                                    "references": 1,
+                                })
+                                break
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).debug("cross_repo blast radius failed", exc_info=True)
+
     # Risk scoring (always computed, cheap)
     total = len(importer_files)
     direct_count = len(files_by_depth.get(1, []))
@@ -195,6 +236,9 @@ def get_blast_radius(
             ),
         },
     }
+    if cross_repo and cross_repo_confirmed:
+        result["cross_repo_confirmed"] = cross_repo_confirmed
+        result["cross_repo_confirmed_count"] = len(cross_repo_confirmed)
     if include_depth_scores:
         result["impact_by_depth"] = [
             {

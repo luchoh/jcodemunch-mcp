@@ -90,6 +90,7 @@ class CodeIndex:
     file_mtimes: dict[str, int] = field(default_factory=dict)  # file_path -> os.stat().st_mtime_ns
     file_sizes: dict[str, int] = field(default_factory=dict)   # file_path -> size in bytes (UTF-8 encoded)
     alias_map: dict[str, list[str]] = field(default_factory=dict)  # tsconfig/jsconfig path aliases; auto-loaded from source_root
+    package_names: list[str] = field(default_factory=list)    # Package names published by this repo (from manifest files)
 
     def __post_init__(self) -> None:
         if not self.display_name:
@@ -457,6 +458,7 @@ class IndexStore:
         context_metadata: Optional[dict] = None,
         file_blob_shas: Optional[dict[str, str]] = None,
         file_mtimes: Optional[dict[str, int]] = None,
+        package_names: Optional[list[str]] = None,
     ) -> "CodeIndex":
         """Save index via SQLite backend."""
         # Validate owner/name for path separators (before any slug computation)
@@ -486,6 +488,7 @@ class IndexStore:
             file_languages=merged_file_languages, display_name=display_name,
             imports=imports, context_metadata=context_metadata,
             file_blob_shas=file_blob_shas, file_mtimes=file_mtimes,
+            package_names=package_names,
         )
 
         # Clean up any legacy JSON now that data is safely in SQLite.

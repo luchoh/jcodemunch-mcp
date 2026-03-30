@@ -174,6 +174,7 @@ from ._indexing_pipeline import (
     parse_immediate,
     deferred_summarize,
 )
+from .package_registry import extract_package_names as _extract_package_names
 
 
 def discover_local_files(
@@ -1032,6 +1033,13 @@ def index_folder(
         # Collect structured metadata from providers
         full_context_metadata = collect_metadata(active_providers) if active_providers else None
 
+        # Extract package names from manifest files
+        _pkg_names: list[str] = []
+        try:
+            _pkg_names = _extract_package_names(str(folder_path))
+        except Exception:
+            logger.debug("extract_package_names failed for %s", folder_path, exc_info=True)
+
         # Save index — raw files already written to content dir above,
         # pass empty dict to skip duplicate writes.
         index = store.save_index(
@@ -1050,6 +1058,7 @@ def index_folder(
             imports=file_imports,
             context_metadata=full_context_metadata,
             file_mtimes=file_mtimes,
+            package_names=_pkg_names,
         )
 
         result = {

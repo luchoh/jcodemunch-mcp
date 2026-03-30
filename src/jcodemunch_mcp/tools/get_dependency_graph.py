@@ -7,6 +7,7 @@ from typing import Optional
 from ..storage import IndexStore
 from ..parser.imports import resolve_specifier
 from ._utils import resolve_repo
+from .package_registry import extract_root_package_from_specifier
 
 
 def _build_adjacency(
@@ -59,6 +60,7 @@ def get_dependency_graph(
     direction: str = "imports",
     depth: int = 1,
     storage_path: Optional[str] = None,
+    cross_repo: Optional[bool] = None,
 ) -> dict:
     """Get the file-level dependency graph for a given file.
 
@@ -78,6 +80,11 @@ def get_dependency_graph(
 
     depth = max(1, min(depth, 3))
     start = time.perf_counter()
+
+    # Resolve cross_repo default from config if not explicitly provided
+    if cross_repo is None:
+        from .. import config as _cfg
+        cross_repo = bool(_cfg.get("cross_repo_default", False))
 
     try:
         owner, name = resolve_repo(repo, storage_path)
@@ -136,8 +143,45 @@ def get_dependency_graph(
             entry["imported_by"] = imported_by_list
         neighbors[n] = entry
 
+    # Cross-repo edges: find other repos that publish packages imported by this file
+    cross_repo_edges: list[dict] = []
+    if cross_repo and index.imports:
+        try:
+            from .list_repos import list_repos
+            all_repos_data = list_repos(storage_path=storage_path).get("repos", [])
+            repo_id = f"{owner}/{name}"
+            file_imports_for_file = index.imports.get(file, [])
+            for imp in file_imports_for_file:
+                specifier = imp.get("specifier", "")
+                lang = index.file_languages.get(file, "")
+                root_pkg = extract_root_package_from_specifier(specifier, lang)
+                if not root_pkg:
+                    continue
+                for repo_entry in all_repos_data:
+                    other_repo_id = repo_entry.get("repo", "")
+                    if not other_repo_id or other_repo_id == repo_id or "/" not in other_repo_id:
+                        continue
+                    other_owner, other_name = other_repo_id.split("/", 1)
+                    other_index = store.load_index(other_owner, other_name)
+                    if not other_index:
+                        continue
+                    other_pkg_names = getattr(other_index, "package_names", []) or []
+                    if root_pkg in other_pkg_names:
+                        cross_repo_edges.append({
+                            "from": file,
+                            "to": specifier,
+                            "from_repo": repo_id,
+                            "to_repo": other_repo_id,
+                            "package_name": root_pkg,
+                            "cross_repo": True,
+                        })
+                        break
+        except Exception:
+            import logging as _logging
+            _logging.getLogger(__name__).debug("cross_repo dependency graph failed", exc_info=True)
+
     elapsed = (time.perf_counter() - start) * 1000
-    return {
+    result = {
         "repo": f"{owner}/{name}",
         "file": file,
         "direction": direction,
@@ -149,3 +193,6 @@ def get_dependency_graph(
         "neighbors": neighbors,
         "_meta": {"timing_ms": round(elapsed, 1)},
     }
+    if cross_repo and cross_repo_edges:
+        result["cross_repo_edges"] = cross_repo_edges
+    return result

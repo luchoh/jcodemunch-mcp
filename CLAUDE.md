@@ -1,9 +1,9 @@
 # jcodemunch-mcp — Project Brief
 
 ## Current State
-- **Version:** 1.12.9 (published to PyPI)
+- **Version:** 1.13.0 (published to PyPI)
 - **INDEX_VERSION:** 6
-- **Tests:** 1397 passed, 7 skipped
+- **Tests:** 1378 passed, 9 skipped
 - **Python:** >=3.10
 
 ## Key Files
@@ -28,9 +28,11 @@ src/jcodemunch_mcp/
     get_context_bundle.py   # Symbol + imports bundle; token_budget/budget_strategy
     get_ranked_context.py   # Query-driven budgeted context (BM25 + PageRank)
     resolve_repo.py    # O(1) path→repo-ID lookup
-    find_importers.py  # Files that import a given file (import graph)
+    find_importers.py  # Files that import a given file (import graph); cross_repo param
     find_references.py # Files that reference a given identifier
     test_summarizer.py # Diagnostic tool: probe AI summarizer, report status (disabled by default)
+    package_registry.py # Cross-repo package registry: manifest parsing, registry building, specifier resolution
+    get_cross_repo_map.py # Cross-repo dependency map at the package level
 ```
 
 ## CLI Subcommands
@@ -84,6 +86,7 @@ Tree-sitter grammar lacks clean named fields for these — custom regex extracto
 | `OPENAI_WIRE_API` | — | Set `responses` to use OpenAI Responses API instead of chat/completions |
 | `OPENROUTER_API_KEY` | — | Enables OpenRouter summaries (default model: `meta-llama/llama-3.3-70b-instruct:free`) |
 | `GEMINI_EMBED_TASK_AWARE` | 1 | Set `0`/`false`/`no`/`off` to disable task-type hints (`RETRIEVAL_DOCUMENT` / `CODE_RETRIEVAL_QUERY`) when using Gemini embeddings |
+| `JCODEMUNCH_CROSS_REPO_DEFAULT` | 0 | Set 1 to enable cross-repo traversal by default in find_importers, get_blast_radius, get_dependency_graph |
 
 ## PR / Issue History
 See `git log` and CHANGELOG.md. Active contributors: MariusAdrian88, DrHayt, tmeckel, drax1222.

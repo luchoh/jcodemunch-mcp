@@ -6,6 +6,10 @@ from typing import Optional
 from ..storage import IndexStore
 from ..parser.imports import resolve_specifier
 from ._utils import resolve_repo
+from .package_registry import (
+    build_package_registry,
+    extract_root_package_from_specifier,
+)
 
 
 def _find_importers_single(
@@ -137,12 +141,63 @@ def _find_importers_batch(
     }
 
 
+def _find_cross_repo_importers(
+    file_path: str,
+    repo_id: str,
+    all_repos: list[dict],
+    store: IndexStore,
+    owner: str,
+    name: str,
+) -> list[dict]:
+    """Search other indexed repos for files that import from this repo's package."""
+    # Look up this repo's package names from its index
+    current_index = store.load_index(owner, name)
+    if not current_index:
+        return []
+    pkg_names = getattr(current_index, "package_names", []) or []
+    if not pkg_names:
+        return []
+
+    cross_results: list[dict] = []
+
+    for repo_entry in all_repos:
+        other_repo_id = repo_entry.get("repo", "")
+        if not other_repo_id or other_repo_id == repo_id or "/" not in other_repo_id:
+            continue
+        other_owner, other_name = other_repo_id.split("/", 1)
+        other_index = store.load_index(other_owner, other_name)
+        if not other_index or not other_index.imports:
+            continue
+
+        other_source_files = frozenset(other_index.source_files)
+
+        for src_file, file_imports in other_index.imports.items():
+            for imp in file_imports:
+                specifier = imp.get("specifier", "")
+                # Determine language from file extension
+                lang = other_index.file_languages.get(src_file, "")
+                root_pkg = extract_root_package_from_specifier(specifier, lang)
+                if root_pkg and root_pkg in pkg_names:
+                    cross_results.append({
+                        "file": src_file,
+                        "specifier": specifier,
+                        "names": imp.get("names", []),
+                        "has_importers": True,  # cross-repo — not analyzed further
+                        "cross_repo": True,
+                        "source_repo": other_repo_id,
+                    })
+                    break  # one match per file per other-repo is enough
+
+    return cross_results
+
+
 def find_importers(
     repo: str,
     file_path: Optional[str] = None,
     max_results: int = 50,
     storage_path: Optional[str] = None,
     file_paths: Optional[list[str]] = None,
+    cross_repo: Optional[bool] = None,
 ) -> dict:
     """Find all indexed files that import from file_path.
 
@@ -157,6 +212,8 @@ def find_importers(
         file_paths: List of target file paths (batch mode).
         max_results: Maximum number of importers per file.
         storage_path: Custom storage path.
+        cross_repo: When True, also search other indexed repos for cross-repo importers.
+                    Defaults to the ``cross_repo_default`` config value (False).
 
     Returns:
         Singular mode: dict with flat ``importers`` list and _meta envelope.
@@ -167,6 +224,11 @@ def find_importers(
     """
     if (file_path is None and file_paths is None) or (file_path is not None and file_paths is not None):
         raise ValueError("Provide exactly one of 'file_path' or 'file_paths', not both and not neither.")
+
+    # Resolve cross_repo default from config if not explicitly provided
+    if cross_repo is None:
+        from .. import config as _cfg
+        cross_repo = bool(_cfg.get("cross_repo_default", False))
 
     start = time.perf_counter()
     max_results = max(1, min(max_results, 200))
@@ -181,7 +243,36 @@ def find_importers(
     if not index:
         return {"error": f"Repository not indexed: {owner}/{name}"}
 
+    repo_id = f"{owner}/{name}"
+
     if file_paths is not None:
-        return _find_importers_batch(file_paths, index, max_results, owner, name, start)
+        result = _find_importers_batch(file_paths, index, max_results, owner, name, start)
+        if cross_repo:
+            try:
+                from .list_repos import list_repos
+                all_repos = list_repos(storage_path=storage_path).get("repos", [])
+                cross_results = _find_cross_repo_importers(
+                    file_paths[0] if len(file_paths) == 1 else "",
+                    repo_id, all_repos, store, owner, name,
+                )
+                if cross_results and "results" in result:
+                    # Attach cross-repo results to the batch response
+                    result["cross_repo_importers"] = cross_results[:max_results]
+            except Exception:
+                pass
+        return result
     else:
-        return _find_importers_single(file_path, index, max_results, owner, name, start)
+        result = _find_importers_single(file_path, index, max_results, owner, name, start)
+        if cross_repo and "importers" in result:
+            try:
+                from .list_repos import list_repos
+                all_repos = list_repos(storage_path=storage_path).get("repos", [])
+                cross_results = _find_cross_repo_importers(
+                    file_path, repo_id, all_repos, store, owner, name,
+                )
+                if cross_results:
+                    result["importers"] = result.get("importers", []) + cross_results[:max_results]
+                    result["cross_repo_importer_count"] = len(cross_results)
+            except Exception:
+                pass
+        return result

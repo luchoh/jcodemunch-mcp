@@ -378,6 +378,7 @@ class SQLiteIndexStore:
         context_metadata: Optional[dict] = None,
         file_blob_shas: Optional[dict[str, str]] = None,
         file_mtimes: Optional[dict[str, int]] = None,
+        package_names: Optional[list[str]] = None,
     ) -> "CodeIndex":
         """Save a full index to SQLite. Replaces all existing data."""
         _ensure_index_store_deps()
@@ -427,6 +428,7 @@ class SQLiteIndexStore:
             file_blob_shas=file_blob_shas or {},
             file_mtimes=file_mtimes or {},
             file_sizes=file_sizes,
+            package_names=package_names or [],
         )
 
         db_path = self._db_path(owner, name)
@@ -1221,6 +1223,7 @@ class SQLiteIndexStore:
             file_blob_shas=new_file_blob_shas,
             file_mtimes=new_file_mtimes,
             file_sizes=new_file_sizes,
+            package_names=getattr(old, "package_names", []),
         )
 
     def _build_index_from_rows(
@@ -1269,6 +1272,11 @@ class SQLiteIndexStore:
 
         languages = json.loads(meta.get("languages", "{}"))
         context_metadata = json.loads(meta.get("context_metadata", "{}"))
+        package_names_raw = meta.get("package_names", "[]")
+        try:
+            package_names = json.loads(package_names_raw) if package_names_raw else []
+        except Exception:
+            package_names = []
 
         return CodeIndex(
             repo=meta.get("repo", f"{owner}/{name}"),
@@ -1290,6 +1298,7 @@ class SQLiteIndexStore:
             file_blob_shas=file_blob_shas,
             file_mtimes=file_mtimes,
             file_sizes=file_sizes,
+            package_names=package_names,
         )
 
     def _write_meta(self, conn: sqlite3.Connection, index: "CodeIndex") -> None:
@@ -1306,6 +1315,7 @@ class SQLiteIndexStore:
             "display_name": index.display_name,
             "languages": json.dumps(index.languages),
             "context_metadata": json.dumps(index.context_metadata or {}),
+            "package_names": json.dumps(getattr(index, "package_names", []) or []),
         }
         conn.executemany(
             "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)",

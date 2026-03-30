@@ -4,6 +4,16 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-03-30
+
+### Added
+- **Cross-repository dependency tracking** — import graph tools (`find_importers`, `get_blast_radius`, `get_dependency_graph`, `get_changed_symbols`) now accept an opt-in `cross_repo: bool` parameter (default `false`). When enabled, the tools traverse repo boundaries using a package registry built from manifest files (`pyproject.toml`, `package.json`, `go.mod`, `Cargo.toml`, `*.csproj`). Cross-repo results are annotated with `"cross_repo": true` and `"source_repo"`. Zero behavior change when `cross_repo` is omitted.
+- **`get_cross_repo_map` tool** — new tool that returns the full cross-repository dependency map at the package level, or filtered to a single repo. Shows `depends_on` and `depended_on_by` for each indexed repo, plus a flat `cross_repo_edges` list.
+- **`package_names` field on `CodeIndex`** — package names are extracted from manifest files at index time (both `index_folder` and `index_repo`) and stored in the SQLite meta table. Old indexes load cleanly with `package_names = []`.
+- **`package_registry.py`** — new module providing `extract_package_names()` (5 ecosystems: Python, JS/TS, Go, Rust, C#), `extract_root_package_from_specifier()` (language-aware root extraction), `build_package_registry()` (in-memory registry with mtime-based cache), and `resolve_cross_repo_file()`.
+- **`cross_repo_default` config key** — boolean default for the `cross_repo` parameter across all import graph tools. Env var: `JCODEMUNCH_CROSS_REPO_DEFAULT`. Default: `false`.
+- **53 new tests** (1431 total, 9 skipped).
+
 ## [1.12.9] — docs patch 2026-03-30
 
 ### Changed

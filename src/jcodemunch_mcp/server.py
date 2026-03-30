@@ -48,6 +48,7 @@ from .tools.search_columns import search_columns
 from .tools.get_context_bundle import get_context_bundle
 from .tools.get_ranked_context import get_ranked_context
 from .tools.embed_repo import embed_repo
+from .tools.get_cross_repo_map import get_cross_repo_map
 from .parser.symbols import VALID_KINDS
 from .summarizer import get_provider_name
 from .reindex_state import await_freshness_if_strict
@@ -560,7 +561,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="find_importers",
-            description="Find all files that import a given file. Answers 'what uses this file?'. has_importers=false on a result means that importer is itself unreachable (dead code chain). Supports dbt {{ ref() }} edges. Use file_paths for batch queries.",
+            description="Find all files that import a given file. Answers 'what uses this file?'. has_importers=false on a result means that importer is itself unreachable (dead code chain). Supports dbt {{ ref() }} edges. Use file_paths for batch queries. Set cross_repo=true to also find importers in other indexed repos.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -568,6 +569,7 @@ async def list_tools() -> list[Tool]:
                     "file_path": {"type": "string", "description": "Target file path within the repo (e.g. 'src/features/intake/IntakeService.js'). Use for single-file queries. Cannot be used together with file_paths."},
                     "file_paths": {"type": "array", "items": {"type": "string"}, "description": "List of target file paths for batch queries. Returns a results array. Cannot be used together with file_path."},
                     "max_results": {"type": "integer", "default": 50, "description": "Maximum results per file"},
+                    "cross_repo": {"type": "boolean", "default": False, "description": "When true, also search other indexed repos for cross-repo importers. Default: false (or JCODEMUNCH_CROSS_REPO_DEFAULT env var)."},
                 },
                 "required": ["repo"],
             },
@@ -718,7 +720,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_dependency_graph",
-            description="Get the file-level dependency graph for a given file. Traverses import relationships up to 3 hops. Use to understand what a file depends on ('imports'), what depends on it ('importers'), or both. Prerequisite for blast radius analysis.",
+            description="Get the file-level dependency graph for a given file. Traverses import relationships up to 3 hops. Use to understand what a file depends on ('imports'), what depends on it ('importers'), or both. Prerequisite for blast radius analysis. Set cross_repo=true to include cross-repository edges.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -740,7 +742,12 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "description": "Number of hops to traverse (1–3)",
                         "default": 1
-                    }
+                    },
+                    "cross_repo": {
+                        "type": "boolean",
+                        "description": "When true, include cross-repo edges (imports that resolve to packages in other indexed repos). Default: false.",
+                        "default": False,
+                    },
                 },
                 "required": ["repo", "file"]
             }
@@ -795,7 +802,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="get_blast_radius",
-            description="Find all files affected by changing a symbol. Returns confirmed files (import + name match) and potential files (import only, e.g. wildcard). Use before renaming or deleting a symbol.",
+            description="Find all files affected by changing a symbol. Returns confirmed files (import + name match) and potential files (import only, e.g. wildcard). Use before renaming or deleting a symbol. Set cross_repo=true to also find consumers in other indexed repos.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -816,7 +823,12 @@ async def list_tools() -> list[Tool]:
                         "type": "boolean",
                         "description": "When true, adds impact_by_depth (files grouped by hop distance) and per-depth risk scores. overall_risk_score and direct_dependents_count are always included. Default false.",
                         "default": False
-                    }
+                    },
+                    "cross_repo": {
+                        "type": "boolean",
+                        "description": "When true, also find files in other indexed repos that consume this repo's package. Default: false.",
+                        "default": False,
+                    },
                 },
                 "required": ["repo", "symbol"]
             }
@@ -988,6 +1000,25 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["repo"],
+            },
+        ),
+        Tool(
+            name="get_cross_repo_map",
+            description=(
+                "Return which indexed repos depend on which other indexed repos at the package level. "
+                "Shows the full cross-repository dependency map based on package names extracted from "
+                "manifest files (pyproject.toml, package.json, go.mod, Cargo.toml, etc.). "
+                "Use to visualize how your indexed repos are interconnected. "
+                "Pass repo to filter to a single repo's perspective."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "repo": {
+                        "type": "string",
+                        "description": "Optional repo ID to filter. If omitted, returns the full cross-repo map.",
+                    },
+                },
             },
         ),
     ]
@@ -1249,6 +1280,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     file_paths=arguments.get("file_paths"),
                     max_results=arguments.get("max_results", 50),
                     storage_path=storage_path,
+                    cross_repo=arguments.get("cross_repo"),
                 )
             )
         elif name == "find_references":
@@ -1336,6 +1368,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     direction=arguments.get("direction", "imports"),
                     depth=arguments.get("depth", 1),
                     storage_path=storage_path,
+                    cross_repo=arguments.get("cross_repo"),
                 )
             )
         elif name == "get_blast_radius":
@@ -1347,6 +1380,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     depth=arguments.get("depth", 1),
                     include_depth_scores=arguments.get("include_depth_scores", False),
                     storage_path=storage_path,
+                    cross_repo=arguments.get("cross_repo"),
                 )
             )
         elif name == "get_symbol_diff":
@@ -1427,6 +1461,14 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
                     repo=arguments["repo"],
                     batch_size=arguments.get("batch_size", 50),
                     force=arguments.get("force", False),
+                    storage_path=storage_path,
+                )
+            )
+        elif name == "get_cross_repo_map":
+            result = await asyncio.to_thread(
+                functools.partial(
+                    get_cross_repo_map,
+                    repo=arguments.get("repo"),
                     storage_path=storage_path,
                 )
             )
