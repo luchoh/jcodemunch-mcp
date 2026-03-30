@@ -337,7 +337,10 @@ class OpenAIBatchSummarizer(BaseSummarizer):
                 )
                 self.api_base = None
                 return
-            if not self.api_base or self.api_base == os.environ.get("OPENAI_API_BASE", "").rstrip("/"):
+            cfg_model = (_config.get("summarizer_model", "") or "").strip()
+            if cfg_model:
+                self.model = cfg_model
+            elif not self.api_base or self.api_base == os.environ.get("OPENAI_API_BASE", "").rstrip("/"):
                 self.model = os.environ.get("OPENAI_MODEL", self.model)
             self.max_tokens_per_batch = int(
                 os.environ.get("OPENAI_MAX_TOKENS", str(self.max_tokens_per_batch))

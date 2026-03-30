@@ -1150,3 +1150,27 @@ def test_minimax_model_override_via_config(monkeypatch):
     assert s is not None
     assert isinstance(s, OpenAIBatchSummarizer)
     assert s.model == "minimax-m3"
+
+
+def test_summarizer_model_config_beats_openai_model_env(monkeypatch):
+    """summarizer_model config takes priority over OPENAI_MODEL env var in OpenAI provider."""
+    monkeypatch.setenv("OPENAI_API_BASE", "http://localhost:11434/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "env-model-should-lose")
+    for key in ("ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "MINIMAX_API_KEY", "ZHIPUAI_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+
+    with patch(
+        "jcodemunch_mcp.summarizer.batch_summarize._config.get",
+        side_effect=lambda k, d=None: (
+            "auto" if k == "use_ai_summaries"
+            else "config-model-wins" if k == "summarizer_model"
+            else d
+        ),
+    ):
+        s = _create_summarizer()
+
+    assert s is not None
+    assert isinstance(s, OpenAIBatchSummarizer)
+    assert s.model == "config-model-wins", (
+        f"Expected summarizer_model config to win over OPENAI_MODEL env var, got {s.model!r}"
+    )
