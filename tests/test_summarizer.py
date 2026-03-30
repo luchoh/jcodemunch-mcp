@@ -1174,3 +1174,120 @@ def test_summarizer_model_config_beats_openai_model_env(monkeypatch):
     assert s.model == "config-model-wins", (
         f"Expected summarizer_model config to win over OPENAI_MODEL env var, got {s.model!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Circuit breaker tests
+# ---------------------------------------------------------------------------
+
+
+def _make_symbols(n: int) -> list[Symbol]:
+    """Create n test symbols without summaries."""
+    return [
+        Symbol(
+            id=f"test::sym{i}",
+            file="test.py",
+            name=f"sym{i}",
+            qualified_name=f"sym{i}",
+            kind="function",
+            language="python",
+            signature=f"def sym{i}():",
+        )
+        for i in range(n)
+    ]
+
+
+def test_circuit_breaker_trips_after_consecutive_failures():
+    """After 3 consecutive failures, remaining batches get signature fallback without API calls."""
+    from jcodemunch_mcp.summarizer.batch_summarize import BaseSummarizer
+
+    class FailingSummarizer(BaseSummarizer):
+        call_count = 0
+
+        def _summarize_one_batch(self, batch):
+            self.call_count += 1
+            try:
+                raise RuntimeError("API is down")
+            except Exception:
+                self._record_failure()
+                for sym in batch:
+                    if not sym.summary:
+                        sym.summary = signature_fallback(sym)
+
+    summarizer = FailingSummarizer(client=object())  # non-None client
+    symbols = _make_symbols(50)  # 50 symbols / batch_size=10 = 5 batches
+
+    with patch(
+        "jcodemunch_mcp.summarizer.batch_summarize._config.get",
+        side_effect=lambda k, d=None: 3 if k == "summarizer_max_failures" else 1 if k == "summarizer_concurrency" else d,
+    ):
+        summarizer.summarize_batch(symbols, batch_size=10)
+
+    # Circuit should trip after 3 failures — batches 4 and 5 are skipped
+    assert summarizer.call_count == 3
+    assert summarizer._circuit_broken is True
+    # All symbols should still have summaries (signature fallback)
+    assert all(sym.summary for sym in symbols)
+
+
+def test_circuit_breaker_resets_on_success():
+    """A successful batch resets the failure counter."""
+    from jcodemunch_mcp.summarizer.batch_summarize import BaseSummarizer
+
+    class FlakySummarizer(BaseSummarizer):
+        call_count = 0
+
+        def _summarize_one_batch(self, batch):
+            self.call_count += 1
+            if self.call_count in (1, 2, 4, 5):
+                # Fail batches 1, 2, 4, 5 — but succeed on 3 (resets counter)
+                self._record_failure()
+                for sym in batch:
+                    if not sym.summary:
+                        sym.summary = signature_fallback(sym)
+                return
+            for sym in batch:
+                sym.summary = "AI summary"
+            self._record_success()
+
+    summarizer = FlakySummarizer(client=object())
+    symbols = _make_symbols(60)  # 6 batches
+
+    with patch(
+        "jcodemunch_mcp.summarizer.batch_summarize._config.get",
+        side_effect=lambda k, d=None: 3 if k == "summarizer_max_failures" else 1 if k == "summarizer_concurrency" else d,
+    ):
+        summarizer.summarize_batch(symbols, batch_size=10)
+
+    # All 6 batches attempted because batch 3 resets the counter
+    # Failures: 1,2 (count=2), success 3 (reset), failures 4,5 (count=2), batch 6 runs
+    assert summarizer.call_count == 6
+    assert summarizer._circuit_broken is False
+
+
+def test_circuit_breaker_disabled_when_zero():
+    """Setting summarizer_max_failures=0 disables the circuit breaker."""
+    from jcodemunch_mcp.summarizer.batch_summarize import BaseSummarizer
+
+    class AlwaysFailSummarizer(BaseSummarizer):
+        call_count = 0
+
+        def _summarize_one_batch(self, batch):
+            self.call_count += 1
+            self._record_failure()
+            for sym in batch:
+                if not sym.summary:
+                    sym.summary = signature_fallback(sym)
+
+    summarizer = AlwaysFailSummarizer(client=object())
+    symbols = _make_symbols(50)  # 5 batches
+
+    with patch(
+        "jcodemunch_mcp.summarizer.batch_summarize._config.get",
+        side_effect=lambda k, d=None: 0 if k == "summarizer_max_failures" else 1 if k == "summarizer_concurrency" else d,
+    ):
+        summarizer.summarize_batch(symbols, batch_size=10)
+
+    # All 5 batches attempted — circuit never trips
+    assert summarizer.call_count == 5
+    assert summarizer._circuit_broken is False

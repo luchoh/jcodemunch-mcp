@@ -2,8 +2,9 @@
 
 import logging
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -79,6 +80,30 @@ class BaseSummarizer:
     model: str = ""
     max_tokens_per_batch: int = 500
     client: object = None
+    _consecutive_failures: int = field(default=0, init=False, repr=False)
+    _circuit_broken: bool = field(default=False, init=False, repr=False)
+    _failure_lock: threading.Lock = field(
+        default_factory=threading.Lock, init=False, repr=False
+    )
+
+    def _record_success(self) -> None:
+        """Reset consecutive failure counter on a successful batch."""
+        with self._failure_lock:
+            self._consecutive_failures = 0
+
+    def _record_failure(self) -> None:
+        """Increment failure counter; trip circuit breaker if threshold reached."""
+        max_failures = _config.get("summarizer_max_failures", 3)
+        with self._failure_lock:
+            self._consecutive_failures += 1
+            if max_failures > 0 and self._consecutive_failures >= max_failures:
+                if not self._circuit_broken:
+                    logger.warning(
+                        "AI summarizer failed %d consecutive batches — "
+                        "disabling for remaining symbols (signature fallback)",
+                        self._consecutive_failures,
+                    )
+                self._circuit_broken = True
 
     def summarize_batch(
         self, symbols: list[Symbol], batch_size: int = 10
@@ -88,6 +113,8 @@ class BaseSummarizer:
         Only processes symbols that don't already have summaries.
         Uses concurrent requests for throughput (configurable via
         JCODEMUNCH_SUMMARIZER_CONCURRENCY, default 4).
+        Trips a circuit breaker after summarizer_max_failures (default 3)
+        consecutive failures, falling back to signature for all remaining.
         Returns updated symbols.
         """
         if not self.client:
@@ -109,17 +136,26 @@ class BaseSummarizer:
 
         if max_workers <= 1 or len(batches) <= 1:
             for batch in batches:
-                self._summarize_one_batch(batch)
+                self._run_batch(batch)
         else:
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = {
-                    executor.submit(self._summarize_one_batch, batch): batch
+                    executor.submit(self._run_batch, batch): batch
                     for batch in batches
                 }
                 for future in as_completed(futures):
                     future.result()
 
         return symbols
+
+    def _run_batch(self, batch: list[Symbol]) -> None:
+        """Run a single batch with circuit breaker check."""
+        if self._circuit_broken:
+            for sym in batch:
+                if not sym.summary:
+                    sym.summary = signature_fallback(sym)
+            return
+        self._summarize_one_batch(batch)
 
     def _summarize_one_batch(self, batch: list[Symbol]):
         """Summarize one batch of symbols. Override in subclasses."""
@@ -246,8 +282,11 @@ class BatchSummarizer(BaseSummarizer):
                 else:
                     sym.summary = signature_fallback(sym)
 
+            self._record_success()
+
         except Exception as e:
             logger.warning("AI summarization failed, falling back to signature: %s", e)
+            self._record_failure()
             for sym in batch:
                 if not sym.summary:
                     sym.summary = signature_fallback(sym)
@@ -299,8 +338,11 @@ class GeminiBatchSummarizer(BaseSummarizer):
                 else:
                     sym.summary = signature_fallback(sym)
 
+            self._record_success()
+
         except Exception as e:
             logger.warning("AI summarization failed, falling back to signature: %s", e)
+            self._record_failure()
             for sym in batch:
                 if not sym.summary:
                     sym.summary = signature_fallback(sym)
@@ -466,8 +508,11 @@ class OpenAIBatchSummarizer(BaseSummarizer):
                 else:
                     sym.summary = signature_fallback(sym)
 
+            self._record_success()
+
         except Exception as e:
             logger.warning("AI summarization failed, falling back to signature: %s", e)
+            self._record_failure()
             for sym in batch:
                 if not sym.summary:
                     sym.summary = signature_fallback(sym)

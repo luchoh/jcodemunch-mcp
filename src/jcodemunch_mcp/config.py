@@ -36,6 +36,7 @@ ENV_VAR_MAPPING = {
     "JCODEMUNCH_STATS_FILE_INTERVAL": "stats_file_interval",
     "JCODEMUNCH_SHARE_SAVINGS": "share_savings",
     "JCODEMUNCH_SUMMARIZER_CONCURRENCY": "summarizer_concurrency",
+    "JCODEMUNCH_SUMMARIZER_MAX_FAILURES": "summarizer_max_failures",
     "JCODEMUNCH_ALLOW_REMOTE_SUMMARIZER": "allow_remote_summarizer",
     "JCODEMUNCH_RATE_LIMIT": "rate_limit",
     "JCODEMUNCH_TRANSPORT": "transport",
@@ -290,6 +291,7 @@ DEFAULTS = {
     "stats_file_interval": 3,
     "share_savings": True,
     "summarizer_concurrency": 4,
+    "summarizer_max_failures": 3,
     "allow_remote_summarizer": False,
     "path_map": "",
 }
@@ -336,6 +338,7 @@ CONFIG_TYPES = {
     "stats_file_interval": int,
     "share_savings": bool,
     "summarizer_concurrency": int,
+    "summarizer_max_failures": int,
     "allow_remote_summarizer": bool,
     "path_map": str,
     "version": str,
@@ -1114,6 +1117,10 @@ def generate_template() -> str:
   // "summarizer_concurrency": 4,
   //   Number of parallel threads for AI summarization.
   //   Higher = faster indexing but more API calls.
+  // "summarizer_max_failures": 3,
+  //   Consecutive batch failures before the AI summarizer gives up and
+  //   falls back to signature summaries for remaining symbols.
+  //   Set 0 to disable the circuit breaker (never stop retrying).
 
   // === AI Summarizer ===
   // Controls whether AI is used to generate symbol summaries during indexing.
