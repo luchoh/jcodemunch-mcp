@@ -3257,6 +3257,18 @@ def main(argv: Optional[list[str]] = None):
     )
     _add_common_args(hook_parser)
 
+    # --- hook-pretooluse ---
+    subparsers.add_parser(
+        "hook-pretooluse",
+        help="PreToolUse hook: intercept Read on large code files, suggest jCodemunch (reads stdin)",
+    )
+
+    # --- hook-posttooluse ---
+    subparsers.add_parser(
+        "hook-posttooluse",
+        help="PostToolUse hook: auto-reindex files after Edit/Write (reads stdin)",
+    )
+
     # --- watch-claude ---
     wc_parser = subparsers.add_parser(
         "watch-claude",
@@ -3306,7 +3318,7 @@ def main(argv: Optional[list[str]] = None):
     if any(arg in top_level_flags for arg in raw_argv):
         args = parser.parse_args(raw_argv)
     else:
-        known_commands = {"serve", "watch", "hook-event", "watch-claude", "config", "index-file", "claude-md", "init"}
+        known_commands = {"serve", "watch", "hook-event", "hook-pretooluse", "hook-posttooluse", "watch-claude", "config", "index-file", "claude-md", "init"}
         has_subcommand = any(arg in known_commands for arg in raw_argv if not arg.startswith("-"))
         if not has_subcommand:
             raw_argv = ["serve"] + list(raw_argv)
@@ -3340,6 +3352,14 @@ def main(argv: Optional[list[str]] = None):
             yes=args.yes,
             no_backup=args.no_backup,
         ))
+
+    if args.command == "hook-pretooluse":
+        from .cli.hooks import run_pretooluse
+        sys.exit(run_pretooluse())
+
+    if args.command == "hook-posttooluse":
+        from .cli.hooks import run_posttooluse
+        sys.exit(run_posttooluse())
 
     # Apply config defaults for watcher keys: CLI args > config > env vars.
     # config.load_config() is called inside each subcommand handler, but we need

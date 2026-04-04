@@ -68,6 +68,17 @@ _WORKTREE_HOOKS = {
     }],
 }
 
+_ENFORCEMENT_HOOKS = {
+    "PreToolUse": [{
+        "matcher": "Read",
+        "hooks": [{"type": "command", "command": "jcodemunch-mcp hook-pretooluse"}],
+    }],
+    "PostToolUse": [{
+        "matcher": "Edit|Write",
+        "hooks": [{"type": "command", "command": "jcodemunch-mcp hook-posttooluse"}],
+    }],
+}
+
 # Cursor rules use MDC format (frontmatter + markdown).
 # alwaysApply: true ensures the rule is in context for every agent turn,
 # including subagents — which is the main reliability complaint.
@@ -342,6 +353,35 @@ def _settings_json_path() -> Path:
     return Path.home() / ".claude" / "settings.json"
 
 
+def _merge_hooks(
+    data: dict[str, Any],
+    hook_defs: dict[str, list],
+    marker: str,
+) -> list[str]:
+    """Merge hook definitions into settings data, returning names of added events.
+
+    ``marker`` is a substring used to detect whether our hook is already
+    installed (e.g. ``"jcodemunch-mcp hook-event"``).
+    """
+    hooks = data.setdefault("hooks", {})
+    added: list[str] = []
+
+    for event_name, event_hooks in hook_defs.items():
+        if event_name in hooks:
+            existing_cmds: list[str] = []
+            for rule in hooks[event_name]:
+                for h in rule.get("hooks", []):
+                    existing_cmds.append(h.get("command", ""))
+            if any(marker in c for c in existing_cmds):
+                continue
+            hooks[event_name].extend(event_hooks)
+        else:
+            hooks[event_name] = list(event_hooks)
+        added.append(event_name)
+
+    return added
+
+
 def install_hooks(*, dry_run: bool = False, backup: bool = True) -> str:
     """Merge worktree hooks into ~/.claude/settings.json.
 
@@ -349,33 +389,36 @@ def install_hooks(*, dry_run: bool = False, backup: bool = True) -> str:
     """
     path = _settings_json_path()
     data = _read_json(path)
-
-    hooks = data.get("hooks", {})
-    added = []
-
-    for event_name, event_hooks in _WORKTREE_HOOKS.items():
-        if event_name in hooks:
-            # Check if jcodemunch hook-event is already present
-            existing_cmds = []
-            for rule in hooks[event_name]:
-                for h in rule.get("hooks", []):
-                    existing_cmds.append(h.get("command", ""))
-            if any("jcodemunch-mcp hook-event" in c for c in existing_cmds):
-                continue
-            # Append our rule to the existing list
-            hooks[event_name].extend(event_hooks)
-        else:
-            hooks[event_name] = event_hooks
-        added.append(event_name)
+    added = _merge_hooks(data, _WORKTREE_HOOKS, "jcodemunch-mcp hook-event")
 
     if not added:
         return f"  hooks already present in {path}"
     if dry_run:
         return f"  would add {', '.join(added)} hooks to {path}"
 
-    data["hooks"] = hooks
     _write_json(path, data, backup=backup)
     return f"  added {', '.join(added)} hooks to {path}"
+
+
+def install_enforcement_hooks(*, dry_run: bool = False, backup: bool = True) -> str:
+    """Merge PreToolUse/PostToolUse enforcement hooks into ~/.claude/settings.json.
+
+    PreToolUse (Read)  — nudge Claude toward jCodemunch for large code files.
+    PostToolUse (Edit|Write) — auto-reindex modified files.
+
+    Returns a status message.
+    """
+    path = _settings_json_path()
+    data = _read_json(path)
+    added = _merge_hooks(data, _ENFORCEMENT_HOOKS, "jcodemunch-mcp hook-p")  # matches hook-pretooluse & hook-posttooluse
+
+    if not added:
+        return f"  enforcement hooks already present in {path}"
+    if dry_run:
+        return f"  would add {', '.join(added)} enforcement hooks to {path}"
+
+    _write_json(path, data, backup=backup)
+    return f"  added {', '.join(added)} enforcement hooks to {path}"
 
 
 # ---------------------------------------------------------------------------
@@ -630,6 +673,27 @@ def run_init(
             _demo_actions.append((
                 "Install WorktreeCreate/WorktreeRemove hooks in ~/.claude/settings.json",
                 "New git worktrees would be automatically indexed so jCodemunch stays in sync with every branch you check out",
+            ))
+
+    # ----- Step 3b: Enforcement hooks (PreToolUse + PostToolUse) -----
+    do_enforce = hooks  # same flag enables enforcement hooks
+    if not do_enforce and interactive:
+        print()
+        do_enforce = _prompt_yn(
+            "Install enforcement hooks (intercept Read on large code files, auto-reindex after Edit/Write)?",
+            default=True,
+        )
+    elif not do_enforce and yes:
+        do_enforce = True  # default for --yes mode
+    if do_enforce:
+        msg = install_enforcement_hooks(dry_run=dry_run, backup=backup)
+        print(f"  Enforcement:{msg}")
+        if demo and "would" in msg:
+            _demo_actions.append((
+                "Install PreToolUse + PostToolUse enforcement hooks in ~/.claude/settings.json",
+                "Large code files would be routed through jCodemunch (get_file_outline + get_symbol_source) "
+                "instead of raw Read, and the index would auto-update after every Edit/Write — "
+                "eliminating staleness anxiety and enforcing token-efficient navigation",
             ))
 
     # ----- Step 4: Index -----

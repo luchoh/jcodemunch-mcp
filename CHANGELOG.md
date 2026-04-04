@@ -4,6 +4,15 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.21.27] - 2026-04-04
+
+### Added
+- **PreToolUse enforcement hook** (`hook-pretooluse` subcommand) — intercepts `Read` calls on large code files (>=4KB, configurable via `JCODEMUNCH_HOOK_MIN_SIZE`) and returns a `deny` decision directing Claude to use `get_file_outline` + `get_symbol_source` instead. Non-code files and small files pass through silently. Addresses the "0% jcodemunch efficiency" problem where CLAUDE.md rules are ignored under cognitive load.
+- **PostToolUse auto-reindex hook** (`hook-posttooluse` subcommand) — fires after `Edit` or `Write` on code files and spawns `jcodemunch-mcp index-file` in the background to keep the index fresh. Eliminates "index staleness anxiety" that caused users to bypass jcodemunch and fall back to `Read`.
+- **Enforcement hooks in `init`** — `jcodemunch-mcp init` now offers to install both hooks into `~/.claude/settings.json` (PreToolUse matcher: `Read`, PostToolUse matcher: `Edit|Write`). Enabled by `--hooks` flag or interactive prompt. Idempotent, backup-aware, and respects `--dry-run`/`--demo`.
+- New `_merge_hooks()` helper in `cli/init.py` — shared logic for merging hook definitions into settings.json, used by both worktree and enforcement hook installers.
+- 25 new tests in `test_hooks.py` covering PreToolUse deny/allow logic, PostToolUse indexing, idempotent install, and edge cases (missing files, invalid JSON, Windows creation flags).
+
 ## [1.21.26] - 2026-04-04
 
 ### Added
