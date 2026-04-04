@@ -1,9 +1,9 @@
 # jcodemunch-mcp — Project Brief
 
 ## Current State
-- **Version:** 1.21.25 (published to PyPI)
+- **Version:** 1.21.26 (published to PyPI)
 - **INDEX_VERSION:** 7
-- **Tests:** 2009 passed, 5 skipped
+- **Tests:** 2086 passed, 5 skipped
 - **Python:** >=3.10
 
 ## Key Files
@@ -13,7 +13,7 @@ src/jcodemunch_mcp/
   security.py          # Path validation, skip patterns, file caps
   config.py            # JSONC config: global + per-project layering, env var fallback, language/tool gating
   cli/
-    init.py            # `jcodemunch-mcp init` — one-command onboarding (client detection, config patching, CLAUDE.md, hooks)
+    init.py            # `jcodemunch-mcp init` — one-command onboarding (client detection, config patching, CLAUDE.md, Cursor rules, Windsurf rules, hooks); --demo flag
   parser/
     languages.py       # LANGUAGE_REGISTRY, extension → language map, LanguageSpec
     extractor.py       # parse_file() dispatch; custom parsers for Erlang, Fortran, SQL, Razor
