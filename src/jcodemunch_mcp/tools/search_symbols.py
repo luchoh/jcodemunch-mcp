@@ -16,6 +16,9 @@ BYTES_PER_TOKEN = 4
 # Fuzzy search: BM25 score below this auto-triggers the fuzzy pass
 _FUZZY_NEAR_MISS_THRESHOLD = 0.1
 
+# Feature 1: Negative evidence threshold (default; overridden by config)
+_NEGATIVE_EVIDENCE_THRESHOLD = 0.5
+
 # BM25 hyperparameters (standard Robertson et al. values)
 _BM25_K1 = 1.5
 _BM25_B = 0.75
@@ -32,6 +35,61 @@ _PR_COMBINED_WEIGHT = 100.0
 # Pre-compiled regexes for _tokenize (called ~9000× on cold BM25 build)
 _CAMEL_RE = re.compile(r"([a-z])([A-Z])")
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9]{2,}")
+
+# Search result cache (Feature 5 — session-aware routing)
+import threading
+from collections import OrderedDict
+
+_RESULT_CACHE_MAX = 128
+_result_cache: OrderedDict = OrderedDict()
+_result_cache_lock = threading.Lock()
+
+
+def _result_cache_get(key: tuple) -> Optional[dict]:
+    """Return cached result for key, or None on miss. Returns a shallow copy."""
+    with _result_cache_lock:
+        if key in _result_cache:
+            _result_cache.move_to_end(key)  # LRU refresh
+            cached = _result_cache[key]
+            # Track hit count for session state persistence priority
+            cached["_hit_count"] = cached.get("_hit_count", 0) + 1
+            # Shallow copy top-level + _meta to prevent caller mutations
+            result = dict(cached)
+            result.pop("_hit_count", None)  # don't leak internal field
+            if "_meta" in result:
+                result["_meta"] = dict(result["_meta"])
+            return result
+    return None
+
+
+def _get_cache_max() -> int:
+    try:
+        from .. import config as _cfg
+        return _cfg.get("search_result_cache_max", _RESULT_CACHE_MAX)
+    except Exception:
+        return _RESULT_CACHE_MAX
+
+
+def _result_cache_put(key: tuple, value: dict) -> None:
+    """Store result in LRU cache, evicting oldest if full."""
+    with _result_cache_lock:
+        if key in _result_cache:
+            _result_cache.move_to_end(key)
+        _result_cache[key] = value
+        _max = _get_cache_max()
+        while len(_result_cache) > _max:
+            _result_cache.popitem(last=False)  # evict oldest
+
+
+def result_cache_invalidate_repo(repo_key: str) -> int:
+    """Evict all cache entries for a specific repo."""
+    evicted = 0
+    with _result_cache_lock:
+        keys_to_evict = [k for k in _result_cache if k[0] == repo_key]
+        for k in keys_to_evict:
+            del _result_cache[k]
+            evicted += 1
+    return evicted
 
 
 def _tokenize(text: str) -> list[str]:
@@ -317,6 +375,36 @@ def search_symbols(
     if not index:
         return {"error": f"Repository not indexed: {owner}/{name}"}
 
+    # Feature 5: Search result cache
+    # Skip cache for debug/semantic modes (these need fresh data)
+    _cacheable = not debug and not semantic and not semantic_only and _get_cache_max() > 0
+    _indexed_at = getattr(index, "indexed_at", "")
+    _cache_key: Optional[tuple] = None
+    if _cacheable:
+        # Include indexed_at in key so cache auto-invalidates on reindex
+        _cache_key = (
+            f"{owner}/{name}",
+            _indexed_at,
+            query,
+            detail_level,
+            kind,
+            file_pattern,
+            language,
+            max_results,
+            fuzzy,
+            fuzzy_threshold,
+            max_edit_distance,
+            sort_by,
+            semantic_weight,
+            token_budget,
+        )
+        _cached = _result_cache_get(_cache_key)
+        if _cached is not None:
+            # Cache hit — return immediately with fresh timing
+            _cached["_meta"]["timing_ms"] = round((time.perf_counter() - start) * 1000, 1)
+            _cached["_meta"]["cache_hit"] = True
+            return _cached
+
     # Semantic: validate provider before doing any expensive work
     _semantic_provider: Optional[tuple[str, str]] = None
     if semantic or semantic_only:
@@ -574,6 +662,36 @@ def search_symbols(
 
     elapsed = (time.perf_counter() - start) * 1000
 
+    # Feature 1: Negative evidence — tell the AI when nothing was found
+    negative_evidence: Optional[dict] = None
+    _ne_threshold = _NEGATIVE_EVIDENCE_THRESHOLD
+    try:
+        from .. import config as _cfg
+        _ne_threshold = _cfg.get("negative_evidence_threshold", _NEGATIVE_EVIDENCE_THRESHOLD)
+    except Exception:
+        pass
+    if not scored_results or max_bm25_score < _ne_threshold:
+        # Find files whose names partially match query terms
+        query_lower = query.lower()
+        related_existing: list[str] = []
+        for f in index.source_files:
+            fname = f.lower().split("/")[-1].split("\\")[-1]
+            for term in query_terms:
+                if term in fname:
+                    related_existing.append(f)
+                    break
+        related_existing = related_existing[:5]  # cap at 5
+
+        verdict = "no_implementation_found" if not scored_results else "low_confidence_matches"
+        negative_evidence = {
+            "verdict": verdict,
+            "scanned_symbols": candidates_scored if candidates_scored > 0 else len(index.symbols),
+            "scanned_files": len(seen_files) if seen_files else len(index.source_files),
+            "best_match_score": round(max_bm25_score, 3) if max_bm25_score > 0 else 0.0,
+        }
+        if related_existing:
+            negative_evidence["related_existing"] = related_existing
+
     meta = {
         "timing_ms": round(elapsed, 1),
         "total_symbols": len(index.symbols),
@@ -592,11 +710,21 @@ def search_symbols(
     if scored_results:
         meta["hint"] = "Use get_context_bundle(symbol_id) to retrieve source + imports in one call"
 
-    return {
+    result = {
         "result_count": len(scored_results),
         "results": scored_results,
         "_meta": meta,
     }
+
+    # Feature 1: Add negative_evidence if present
+    if negative_evidence is not None:
+        result["negative_evidence"] = negative_evidence
+
+    # Feature 5: Cache the result if cacheable
+    if _cacheable and _cache_key is not None:
+        _result_cache_put(_cache_key, result)
+
+    return result
 
 
 def _search_symbols_semantic(
@@ -641,6 +769,14 @@ def _search_symbols_semantic(
     import logging as _logging
 
     _logger = _logging.getLogger(__name__)
+
+    # Config-driven negative evidence threshold
+    _ne_threshold = _NEGATIVE_EVIDENCE_THRESHOLD
+    try:
+        from .. import config as _cfg
+        _ne_threshold = _cfg.get("negative_evidence_threshold", _NEGATIVE_EVIDENCE_THRESHOLD)
+    except Exception:
+        pass
 
     # Determine task types (Gemini only; no-op for other providers).
     query_task_type: Optional[str] = None
@@ -796,10 +932,33 @@ def _search_symbols_semantic(
     if scored_results:
         meta["hint"] = "Use get_context_bundle(symbol_id) to retrieve source + imports in one call"
 
-    return {
+    # Feature 1: Negative evidence for semantic search
+    result = {
         "result_count": len(scored_results),
         "results": scored_results,
         "_meta": meta,
     }
+    if not scored_results or max_bm25 < _ne_threshold:
+        # Find files whose names partially match query terms
+        query_lower = query.lower()
+        related_existing: list[str] = []
+        for f in index.source_files:
+            fname = f.lower().split("/")[-1].split("\\")[-1]
+            for term in query_terms:
+                if term in fname:
+                    related_existing.append(f)
+                    break
+        related_existing = related_existing[:5]  # cap at 5
+
+        verdict = "no_implementation_found" if not scored_results else "low_confidence_matches"
+        result["negative_evidence"] = {
+            "verdict": verdict,
+            "scanned_symbols": len(raw),
+            "scanned_files": len(seen_files) if seen_files else len(index.source_files),
+            "best_match_score": round(max_bm25, 3) if max_bm25 > 0 else 0.0,
+            **({"related_existing": related_existing} if related_existing else {}),
+        }
+
+    return result
 
 

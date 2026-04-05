@@ -297,6 +297,17 @@ DEFAULTS = {
     "path_map": "",
     "cross_repo_default": False,
     "discovery_hint": True,
+    # Session-aware routing (Feature 6)
+    "negative_evidence_threshold": 0.5,
+    "search_result_cache_max": 128,
+    "session_journal": True,
+    "plan_turn_high_threshold": 2.0,
+    "plan_turn_medium_threshold": 0.5,
+    "turn_budget_tokens": 20000,
+    "turn_gap_seconds": 30.0,
+    "session_resume": False,
+    "session_max_age_minutes": 30,
+    "session_max_queries": 50,
 }
 
 CONFIG_TYPES = {
@@ -348,6 +359,17 @@ CONFIG_TYPES = {
     "discovery_hint": bool,
     "version": str,
     "architecture": dict,
+    # Session-aware routing
+    "negative_evidence_threshold": float,
+    "search_result_cache_max": int,
+    "session_journal": bool,
+    "plan_turn_high_threshold": float,
+    "plan_turn_medium_threshold": float,
+    "turn_budget_tokens": int,
+    "turn_gap_seconds": float,
+    "session_resume": bool,
+    "session_max_age_minutes": int,
+    "session_max_queries": int,
 }
 
 
@@ -1116,6 +1138,9 @@ def generate_template() -> str:
         "search_text",
         "suggest_queries",
         "test_summarizer",
+        "plan_turn",
+        "register_edit",
+        "get_session_context",
     ])
     tools_str = "\n  // ".join(f'"{t}",' for t in all_tools)
 
@@ -1313,6 +1338,33 @@ def generate_template() -> str:
   //   Consecutive batch failures before the AI summarizer gives up and
   //   falls back to signature summaries for remaining symbols.
   //   Set 0 to disable the circuit breaker (never stop retrying).
+
+  // === Session-Aware Routing ===
+  // "negative_evidence_threshold": 0.5,
+  //   BM25 score threshold for negative evidence in search_symbols.
+  //   When the best match score is below this, the response includes
+  //   structured negative_evidence to prevent AI hallucination.
+  // "search_result_cache_max": 128,
+  //   Maximum entries in the search_symbols result cache. 0 = disable cache.
+  // "session_journal": true,
+  //   Track file reads, searches, and edits during the MCP session.
+  //   Disable to reduce memory usage in long-running sessions.
+  // "plan_turn_high_threshold": 2.0,
+  //   Minimum BM25 score for plan_turn to report "high" confidence.
+  // "plan_turn_medium_threshold": 0.5,
+  //   Minimum BM25 score for plan_turn to report "medium" confidence.
+  // "turn_budget_tokens": 20000,
+  //   Max tokens returned across all tool calls in a turn. 0 = disabled.
+  // "turn_gap_seconds": 30.0,
+  //   Seconds of silence before a new "turn" begins (heuristic).
+  // "session_resume": false,
+  //   Persist and restore session state (journal, cache) across restarts.
+  //   Writes only on clean shutdown (NVME-friendly). State validated
+  //   against git HEAD (or indexed_at for non-Git projects) on restore.
+  // "session_max_age_minutes": 30,
+  //   Discard saved session state older than this.
+  // "session_max_queries": 50,
+  //   Cap on persisted search cache entries.
 
   // === AI Summarizer ===
   // Controls whether AI is used to generate symbol summaries during indexing.
