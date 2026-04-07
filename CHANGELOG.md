@@ -2,15 +2,18 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.23.2] — 2026-04-07
+
+### Added
+- `get_blast_radius`: new `include_source` flag returns `source_snippets` (lines referencing the symbol) and `symbols_in_file` (nearby symbol signatures) on each confirmed entry — enables fix-ready context in one call without extra `get_symbol_source`/`get_file_content` round-trips. Optional `source_budget` (default 8000 tokens) caps output size; files prioritised by reference count (#221, @MariusAdrian88)
+
+### Fixed
+- `get_blast_radius`: `decorator_filter` was missing from session cache key, which could return stale filtered results
+
 ## [1.23.1] — 2026-04-07
 
 ### Changed
 - Switch MCP tool responses from pretty-printed JSON (`indent=2`) to compact JSON (`separators=(',',':')`) — saves 30-40% tokens per response with zero information loss (fixes #219)
-
-## [Unreleased]
-
-### Added
-- `get_blast_radius`: new `include_source` flag returns `source_snippets` (lines referencing the symbol) and `symbols_in_file` (nearby symbol signatures) on each confirmed entry — enables fix-ready context in one call without extra `get_symbol_source`/`get_file_content` round-trips. Optional `source_budget` (default 8000 tokens) caps output size; files prioritised by reference count.
 
 ## [1.23.0] - 2026-04-07
 
