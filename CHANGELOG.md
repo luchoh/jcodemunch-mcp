@@ -4,6 +4,26 @@ All notable changes to jcodemunch-mcp are documented here.
 
 ## [Unreleased]
 
+## [1.23.0] - 2026-04-07
+
+### Added
+- **AST-based call graph** — extract `call_expression` nodes during tree-sitter parsing and store as `call_references` per symbol. 13 languages supported including constructor calls (`new Foo()`). INDEX_VERSION bumped from 7 to 8 with full v7 backward compatibility (graceful degradation to text heuristic). Confidence upgraded from "low" to "medium" for AST-derived results.
+- **Decorator awareness** — `search_symbols(decorator=...)` filter (case-insensitive substring match), `get_blast_radius(decorator_filter=...)`, and decorator surfacing in `get_file_outline` results. Enables cross-cutting concern discovery (e.g. "which endpoints lack CSRF protection?").
+- **Negative evidence + enforcement signals** — structured `negative_evidence` and top-level `⚠ warning` strings in `get_ranked_context` and `search_symbols` when queries return empty/low-confidence results. `plan_turn` emits `action: "STOP_AND_REPORT_GAP"` on low/none confidence. Reduces LLM hallucination about missing features.
+- **18 new framework route/middleware providers** — Flask, FastAPI, Express, Fastify, Hono, Koa, Gin, Chi, Echo, Fiber, Django (+ DRF), Spring Boot, NestJS, ASP.NET, Rails. Consolidated entry-point decorator regex into `_route_utils.py`. 8 new `FrameworkProfile` definitions.
+
+### Changed
+- **Performance optimizations** — single-pass AST walk for symbols + call sites, lazy `_callers_by_name` index (0ms load when unused), pre-computed `enrich_symbols` file context cache (~60-80% fewer provider calls), fuzzy search early-exit cap at 5× max_results, merged disambiguate + complexity pass, O(1) PHP detection via `languages` set.
+- **`get_dead_code_v2` Signal 2** — uses AST `call_references` lookup (O(1)) on v8 indexes instead of O(N×M) file I/O.
+- `budget_warning` promoted to top-level alongside `_meta` for visibility.
+
+### Fixed
+- Semantic search negative evidence used fragile nested ternary — replaced with named `best_score` variable.
+- Empty query terms guard added to `search_symbols`, `get_ranked_context`, and `plan_turn`.
+
+### Contributors
+- @MariusAdrian88
+
 ## [1.22.6] - 2026-04-06
 
 ### Fixed
