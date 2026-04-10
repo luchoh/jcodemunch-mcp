@@ -598,6 +598,68 @@ async def watch_folders(
 
 
 # ---------------------------------------------------------------------------
+# One-shot sync (watch --once)
+# ---------------------------------------------------------------------------
+
+async def sync_folders(
+    paths: list[str],
+    use_ai_summaries: bool = True,
+    storage_path: Optional[str] = None,
+    extra_ignore_patterns: Optional[list[str]] = None,
+    follow_symlinks: bool = False,
+) -> None:
+    """Index all paths once (incremental) and return immediately — no file watching."""
+    resolved = []
+    for p in paths:
+        folder = Path(p).expanduser().resolve()
+        if not folder.is_dir():
+            print(f"WARNING: skipping {p} — not a directory", file=sys.stderr)
+            continue
+        resolved.append(str(folder))
+
+    if not resolved:
+        print("ERROR: no valid directories to sync", file=sys.stderr)
+        sys.exit(1)
+
+    _pairs = parse_path_map()
+    store = IndexStore(base_path=storage_path)
+    errors = 0
+
+    for folder in resolved:
+        repo_id = _local_repo_id(remap(folder, _pairs, reverse=True))
+        print(f"Syncing {folder}...", file=sys.stderr)
+        mark_reindex_start(repo_id)
+        try:
+            result = await asyncio.to_thread(
+                index_folder,
+                path=folder,
+                use_ai_summaries=use_ai_summaries,
+                storage_path=storage_path,
+                extra_ignore_patterns=extra_ignore_patterns,
+                follow_symlinks=follow_symlinks,
+                incremental=True,
+            )
+            if result.get("success"):
+                msg = result.get("message", f"{result.get('symbol_count', '?')} symbols")
+                duration = result.get("duration_seconds", "?")
+                print(f"  {folder}: {msg} ({duration}s)", file=sys.stderr)
+                mark_reindex_done(repo_id, result)
+            else:
+                print(f"  ERROR: {folder}: {result.get('error')}", file=sys.stderr)
+                mark_reindex_failed(repo_id, result.get("error", "unknown error"))
+                errors += 1
+        except Exception as exc:
+            print(f"  ERROR: {folder}: {exc}", file=sys.stderr)
+            mark_reindex_failed(repo_id, str(exc))
+            errors += 1
+
+    store.close()
+
+    if errors:
+        sys.exit(1)
+
+
+# ---------------------------------------------------------------------------
 # worktree helpers
 # ---------------------------------------------------------------------------
 

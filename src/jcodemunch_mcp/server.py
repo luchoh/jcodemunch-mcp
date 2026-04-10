@@ -3613,6 +3613,11 @@ def main(argv: Optional[list[str]] = None):
         metavar="MINUTES",
         help="Auto-shutdown after N minutes with no re-indexing (default: disabled)",
     )
+    watch_parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Index all paths once (incremental) and exit immediately — no file watching",
+    )
     _add_common_args(watch_parser)
 
     # --- config ---
@@ -3918,20 +3923,33 @@ def main(argv: Optional[list[str]] = None):
     _setup_logging(args)
 
     if args.command == "watch":
-        from .watcher import watch_folders
-
         use_ai = not args.no_ai_summaries and _default_use_ai_summaries()
-        asyncio.run(
-            watch_folders(
-                paths=args.paths,
-                debounce_ms=args.debounce,
-                use_ai_summaries=use_ai,
-                storage_path=os.environ.get("CODE_INDEX_PATH"),
-                extra_ignore_patterns=args.extra_ignore,
-                follow_symlinks=args.follow_symlinks,
-                idle_timeout_minutes=args.idle_timeout,
+        if args.once:
+            from .watcher import sync_folders
+
+            asyncio.run(
+                sync_folders(
+                    paths=args.paths,
+                    use_ai_summaries=use_ai,
+                    storage_path=os.environ.get("CODE_INDEX_PATH"),
+                    extra_ignore_patterns=args.extra_ignore,
+                    follow_symlinks=args.follow_symlinks,
+                )
             )
-        )
+        else:
+            from .watcher import watch_folders
+
+            asyncio.run(
+                watch_folders(
+                    paths=args.paths,
+                    debounce_ms=args.debounce,
+                    use_ai_summaries=use_ai,
+                    storage_path=os.environ.get("CODE_INDEX_PATH"),
+                    extra_ignore_patterns=args.extra_ignore,
+                    follow_symlinks=args.follow_symlinks,
+                    idle_timeout_minutes=args.idle_timeout,
+                )
+            )
     elif args.command == "hook-event":
         from .hook_event import handle_hook_event
 

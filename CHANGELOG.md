@@ -2,6 +2,11 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.24.3] — 2026-04-10
+
+### Added
+- **`watch --once`**: one-shot index sync — indexes all paths incrementally and exits immediately. No watchfiles dependency required. Supports multiple paths. Exit code 1 if any path fails (#227, thanks @kecsap!)
+
 ## [1.24.2] — 2026-04-08
 
 ### Added
