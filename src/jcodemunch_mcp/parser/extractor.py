@@ -424,7 +424,7 @@ def _walk_tree(
     if node.type == "function_signature" and node.parent and node.parent.type == "method_signature":
         return
 
-    is_cpp = language == "cpp"
+    is_cpp = language in ("cpp", "arduino")
     local_scope_parts = scope_parts or []
     next_parent = parent_symbol
     next_class_scope_depth = class_scope_depth
@@ -577,7 +577,7 @@ def _extract_symbol(
         return None
     
     # Build qualified name
-    if language == "cpp":
+    if language in ("cpp", "arduino"):
         if parent_symbol:
             qualified_name = f"{parent_symbol.qualified_name}.{name}"
         elif scope_parts:
@@ -594,7 +594,7 @@ def _extract_symbol(
             qualified_name = name
 
     signature_node = node
-    if language == "cpp":
+    if language in ("cpp", "arduino"):
         wrapper = _nearest_cpp_template_wrapper(node)
         if wrapper:
             signature_node = wrapper
@@ -723,7 +723,7 @@ def _extract_name(node, spec: LanguageSpec, source_bytes: bytes) -> Optional[str
     name_node = node.child_by_field_name(field_name)
     
     if name_node:
-        if spec.ts_language == "cpp":
+        if spec.ts_language in ("cpp", "arduino"):
             return _extract_cpp_name(name_node, source_bytes)
 
         # C function_definition: declarator is a function_declarator,

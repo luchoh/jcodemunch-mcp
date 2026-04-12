@@ -2096,3 +2096,90 @@ def test_xml_extension_mapping():
     assert get_language_for_path("config/settings.xml") == "xml"
     assert get_language_for_path("ui/main.xul") == "xml"
     assert get_language_for_path("data/UPPER.XML") == "xml"
+
+
+# ---------------------------------------------------------------------------
+# Arduino
+# ---------------------------------------------------------------------------
+
+ARDUINO_SOURCE = """\
+#include <Servo.h>
+#include "config.h"
+#define LED_PIN 13
+
+class MotorController {
+public:
+    explicit MotorController(int pin) : pin_(pin) {}
+
+    void start() {
+        analogWrite(pin_, 255);
+    }
+
+private:
+    int pin_;
+};
+
+struct SensorReading {
+    float temperature;
+    float humidity;
+};
+
+void setup() {
+    Serial.begin(9600);
+    pinMode(LED_PIN, OUTPUT);
+}
+
+void loop() {
+    digitalWrite(LED_PIN, HIGH);
+    delay(1000);
+}
+
+float readTemperature(int sensorPin) {
+    int raw = analogRead(sensorPin);
+    return raw * 0.48828125;
+}
+"""
+
+
+def test_parse_arduino():
+    """Test Arduino (.ino) parsing — C++ superset."""
+    symbols = parse_file(ARDUINO_SOURCE, "sketch.ino", "arduino")
+
+    # Functions
+    setup_fn = next((s for s in symbols if s.name == "setup"), None)
+    assert setup_fn is not None
+    assert setup_fn.kind == "function"
+
+    loop_fn = next((s for s in symbols if s.name == "loop"), None)
+    assert loop_fn is not None
+    assert loop_fn.kind == "function"
+
+    read_temp = next((s for s in symbols if s.name == "readTemperature"), None)
+    assert read_temp is not None
+    assert read_temp.kind == "function"
+
+    # Class
+    motor = next((s for s in symbols if s.name == "MotorController"), None)
+    assert motor is not None
+    assert motor.kind == "class"
+
+    # Struct
+    reading = next((s for s in symbols if s.name == "SensorReading"), None)
+    assert reading is not None
+    assert reading.kind == "type"
+
+    # Constant
+    led_pin = next((s for s in symbols if s.name == "LED_PIN"), None)
+    assert led_pin is not None
+    assert led_pin.kind == "constant"
+
+    # All symbols tagged as arduino
+    assert all(s.language == "arduino" for s in symbols)
+
+
+def test_arduino_extension_mapping():
+    """.ino and .pde extensions map to arduino language."""
+    from jcodemunch_mcp.parser.languages import get_language_for_path
+    assert get_language_for_path("sketch/Blink.ino") == "arduino"
+    assert get_language_for_path("old/Blink.pde") == "arduino"
+    assert get_language_for_path("SKETCH.INO") == "arduino"

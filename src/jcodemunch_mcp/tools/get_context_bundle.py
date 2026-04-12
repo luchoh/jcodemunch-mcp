@@ -124,6 +124,7 @@ _IMPORT_PATTERNS: dict[str, list[re.Pattern]] = {
     "csharp":     [re.compile(r"^\s*using \S")],
     "c":          [re.compile(r"^\s*#\s*include\b")],
     "cpp":        [re.compile(r"^\s*#\s*include\b")],
+    "arduino":    [re.compile(r"^\s*#\s*include\b")],
     "swift":      [re.compile(r"^\s*import \S")],
     "ruby":       [re.compile(r"^\s*(require |require_relative )")],
     "php":        [re.compile(r"^\s*(use |require|include)\b")],

@@ -408,6 +408,7 @@ _LANGUAGE_EXTRACTORS = {
     "c": _extract_c_imports,
     "cpp": _extract_c_imports,
     "objc": _extract_c_imports,
+    "arduino": _extract_c_imports,
     "ruby": _extract_ruby_imports,
     "csharp": _extract_csharp_imports,
     "php": _extract_php_imports,

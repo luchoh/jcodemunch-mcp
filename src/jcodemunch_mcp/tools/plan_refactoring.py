@@ -41,6 +41,7 @@ _IMPORT_PATTERNS = {
     "c": re.compile(r"^\s*#\s*include\s+[<\"]"),
     "cpp": re.compile(r"^\s*#\s*include\s+[<\"]"),
     "objc": re.compile(r"^\s*#\s*(include|import)\s+[<\"]"),
+    "arduino": re.compile(r"^\s*#\s*include\s+[<\"]"),
     "swift": re.compile(r"^\s*import\s+\w+"),
     "scala": re.compile(r"^\s*import\s+[\w.{]"),
     "haskell": re.compile(r"^\s*import\s+(qualified\s+)?"),
@@ -80,6 +81,7 @@ _DEF_PATTERNS = {
     "c": re.compile(r"^\s*(struct|enum|union|typedef)\s+{name}\b"),
     "cpp": re.compile(r"^\s*(class|struct|enum|union|namespace|template)\s+{name}\b"),
     "objc": re.compile(r"^\s*@(interface|implementation|protocol)\s+{name}\b"),
+    "arduino": re.compile(r"^\s*(class|struct|enum|union|namespace|template)\s+{name}\b"),
     "swift": re.compile(r"^\s*(public\s+|private\s+|internal\s+|open\s+|fileprivate\s+)?(class|struct|enum|protocol|func|extension|typealias|actor)\s+{name}\b"),
     "scala": re.compile(r"^\s*(private\s+|protected\s+)?(abstract\s+|sealed\s+|case\s+)?(class|object|trait|def|val|var|type|enum)\s+{name}\b"),
     "haskell": re.compile(r"^\s*(data|type|newtype|class)\s+{name}\b"),
@@ -654,8 +656,8 @@ def _compute_new_import(old_import_line, old_file, new_file, sym_name, language)
             return old_import_line.replace(old_spec, new_spec), None
         return old_import_line, f"Ruby require path '{old_spec}' not found in require statement"
 
-    elif language in ("c", "cpp", "objc"):
-        # C/C++/ObjC: #include "old/path.h" → #include "new/path.h"
+    elif language in ("c", "cpp", "objc", "arduino"):
+        # C/C++/ObjC/Arduino: #include "old/path.h" → #include "new/path.h"
         # Only rewrite quoted includes (not angle-bracket system includes)
         old_spec = PurePosixPath(old_file).as_posix()
         new_spec = PurePosixPath(new_file).as_posix()
@@ -845,7 +847,7 @@ def _format_import_line(imp_dict, language):
         return f"use {spec};"
     elif language == "ruby":
         return f"require '{spec}'"
-    elif language in ("c", "cpp", "objc"):
+    elif language in ("c", "cpp", "objc", "arduino"):
         return f'#include "{spec}"'
     elif language == "swift":
         return f"import {spec}"
@@ -1748,7 +1750,7 @@ def _plan_signature_change(index, store, owner, name, sym, new_signature, depth)
             keyword = "defp" if first_line.strip().startswith("defp") else "def"
             new_def = f"{indent}{keyword} {new_signature}"
 
-        elif lang in ("c", "cpp"):
+        elif lang in ("c", "cpp", "arduino"):
             sig_lines, line_sep, sig_end_idx = _capture_multiline_sig(lines, def_line_idx, content)
             old_def = line_sep.join(sig_lines)
             new_def = f"{indent}{new_signature}"
