@@ -2,14 +2,6 @@
 
 from typing import Optional
 
-# Prefer compiled jCore backend when available
-try:
-    from _jmunch_core import compute_pagerank as _native_pagerank
-    _HAS_JCORE = True
-except ImportError:
-    _HAS_JCORE = False
-
-
 def compute_pagerank(
     imports: dict,
     source_files: list,
@@ -46,11 +38,7 @@ def compute_pagerank(
                 seen.add(target)
                 edges.append((src_file, target))
 
-    # Use compiled jCore backend when available
-    if _HAS_JCORE:
-        return _native_pagerank(edges, list(source_files), damping=damping, max_iter=max_iter, tol=tol)
-
-    # Python fallback — build adjacency from resolved edges
+    # Build adjacency from resolved edges
     out_links: dict = {f: [] for f in source_files}
     in_links: dict = {f: [] for f in source_files}
     for src_file, target in edges:

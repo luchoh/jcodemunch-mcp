@@ -2,18 +2,14 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
-## [1.44.3] — 2026-04-15
+## [1.45.0] — 2026-04-15
 
 ### Added
-- **Native performance backend** — Windows x64 users automatically get compiled native backend for tokenizer, budget packing, hotspot scoring, fusion, and PageRank. Falls back gracefully to Python on other platforms. Linux and macOS wheels coming soon.
-
-## [1.44.2] — 2026-04-15
+- **Enhanced BM25 tokenizer** — Porter-style suffix stemming ("searching" → "search", "running" → "run") and bidirectional abbreviation expansion (40 entries: "db" ↔ "database", "config" ↔ "configuration", etc.). Significantly improves recall for natural-language queries against code symbols.
+- **Diversity-aware budget packing** — `get_ranked_context` now spreads results across files (per-file cap of 3, decay penalty for same-file repeats) instead of greedy same-file stacking. Produces more useful context bundles.
 
 ### Fixed
-- **Content hash consistency** — drift detection now always uses SHA-256, preventing false-positive staleness on existing indexes.
-- **Budget packing efficiency** — lazy source loading cuts memory usage for large repos (only loads ~2× budget worth of candidates instead of all).
-- **Hotspot filtering** — pre-filters symbols by kind/complexity before scoring, avoiding unnecessary work on large indexes.
-- **BM25 tokenizer quality** — abbreviation expansions ("database", "configuration") are no longer over-stemmed to invalid fragments; stemmer and dedup performance improved.
+- **Content hash consistency** — drift detection always uses SHA-256, preventing false-positive staleness on existing indexes.
 
 ## [1.44.1] — 2026-04-14
 

@@ -11,13 +11,6 @@ from ..storage import IndexStore, CodeIndex, record_savings, estimate_savings, c
 from ..parser.imports import resolve_specifier
 from ._utils import resolve_repo, resolve_fqn
 
-# Prefer compiled jCore tokenizer when available (stemming + abbreviation expansion)
-try:
-    from _jmunch_core import tokenize as _jcore_tokenize
-    _HAS_JCORE_TOKENIZER = True
-except ImportError:
-    _HAS_JCORE_TOKENIZER = False
-
 BYTES_PER_TOKEN = 4
 
 # Fuzzy search: BM25 score below this auto-triggers the fuzzy pass
@@ -99,19 +92,99 @@ def result_cache_invalidate_repo(repo_key: str) -> int:
     return evicted
 
 
-def _tokenize(text: str) -> list[str]:
-    """Split camelCase / snake_case text into lowercase tokens.
+# ---------------------------------------------------------------------------
+# Abbreviation map: bidirectional code abbreviation <-> full form.
+# Built once at import time.
+# ---------------------------------------------------------------------------
+_ABBREV_MAP: dict[str, list[str]] = {
+    "db": ["database"], "auth": ["authentication", "authorization"],
+    "config": ["configuration"], "ctx": ["context"], "env": ["environment"],
+    "err": ["error"], "exec": ["execute", "execution"],
+    "fn": ["function"], "func": ["function"],
+    "impl": ["implementation", "implement"], "init": ["initialize", "initialization"],
+    "iter": ["iterator", "iterate"], "len": ["length"], "lib": ["library"],
+    "max": ["maximum"], "mem": ["memory"], "min": ["minimum"],
+    "msg": ["message"], "num": ["number"], "obj": ["object"],
+    "param": ["parameter"], "params": ["parameters"], "pkg": ["package"],
+    "prev": ["previous"], "proc": ["process", "procedure"],
+    "prop": ["property"], "props": ["properties"],
+    "ref": ["reference"], "refs": ["references"], "repo": ["repository"],
+    "req": ["request"], "res": ["response", "result"], "ret": ["return"],
+    "src": ["source"], "str": ["string"],
+    "sync": ["synchronize", "synchronous"], "sys": ["system"],
+    "temp": ["temporary"], "tmp": ["temporary"],
+    "val": ["value"], "var": ["variable"], "vars": ["variables"],
+    # Reverse mappings
+    "database": ["db"], "authentication": ["auth"], "authorization": ["auth"],
+    "configuration": ["config"], "context": ["ctx"], "environment": ["env"],
+    "error": ["err"], "execute": ["exec"], "function": ["func", "fn"],
+    "initialize": ["init"], "initialization": ["init"],
+    "iterator": ["iter"], "message": ["msg"],
+    "parameter": ["param"], "parameters": ["params"],
+    "repository": ["repo"], "request": ["req"], "response": ["res"],
+    "temporary": ["temp", "tmp"], "variable": ["var"], "variables": ["vars"],
+}
 
-    When jCore is available, also stems and expands abbreviations
-    (e.g. "searching" -> ["searching", "search"], "db" -> ["db", "database"]).
-    """
+# Stemming rules: (suffix, replacement, min_base_length)
+# Ordered longest-first; doubled-consonant rules before single.
+_STEM_RULES: list[tuple[str, str, int]] = [
+    ("ation", "", 3), ("izing", "ize", 3), ("ating", "ate", 3),
+    ("nning", "n", 2), ("tting", "t", 2), ("pping", "p", 2),
+    ("gging", "g", 2), ("bbing", "b", 2), ("dding", "d", 2),
+    ("mming", "m", 2), ("lling", "l", 2),
+    ("sses", "ss", 2), ("ness", "", 3), ("ment", "", 3), ("tion", "", 3),
+    ("ized", "ize", 3), ("ling", "le", 3), ("ring", "r", 3),
+    ("ning", "n", 3), ("ting", "t", 3), ("ping", "p", 3),
+    ("bing", "b", 2), ("ding", "d", 3), ("ging", "g", 3),
+    ("king", "k", 3), ("ming", "m", 3),
+    ("lled", "ll", 3), ("nned", "n", 3), ("tted", "t", 3),
+    ("pped", "p", 3), ("gged", "g", 3), ("bbed", "b", 3), ("dded", "d", 3),
+    ("ing", "", 3), ("ies", "y", 3),
+    ("ed", "", 3), ("er", "", 3), ("ly", "", 3), ("es", "", 4),
+]
+
+
+def _stem(word: str) -> str:
+    """Lightweight Porter-style suffix stripping for code identifiers."""
+    w = word.lower()
+    if len(w) < 5:
+        return w
+    for suffix, replacement, min_base in _STEM_RULES:
+        if w.endswith(suffix):
+            base = w[:-len(suffix)]
+            if len(base) >= min_base:
+                return base + replacement
+    # Strip trailing 's' if result is 4+ chars and doesn't end in 's'
+    if w.endswith("s") and len(w) >= 5 and w[-2] != "s":
+        return w[:-1]
+    return w
+
+
+def _tokenize(text: str) -> list[str]:
+    """Split camelCase / snake_case text into tokens with stemming and
+    abbreviation expansion for richer BM25 matching."""
     if not text:
         return []
-    if _HAS_JCORE_TOKENIZER:
-        return _jcore_tokenize(text)
-    # Python fallback: basic split only (no stemming, no abbreviation expansion)
     text = _CAMEL_RE.sub(r"\1_\2", text)
-    return [t.lower() for t in _TOKEN_RE.findall(text)]
+    raw_tokens = [t.lower() for t in _TOKEN_RE.findall(text)]
+
+    result = []
+    seen: set[str] = set()
+    for tok in raw_tokens:
+        result.append(tok)
+        seen.add(tok)
+        # Stemmed form
+        stemmed = _stem(tok)
+        if stemmed != tok and stemmed not in seen:
+            result.append(stemmed)
+            seen.add(stemmed)
+        # Abbreviation expansion (canonical forms, not stemmed)
+        for key in (tok, stemmed) if stemmed != tok else (tok,):
+            for exp in _ABBREV_MAP.get(key, ()):
+                if exp not in seen:
+                    result.append(exp)
+                    seen.add(exp)
+    return result
 
 
 def _sym_tokens(sym: dict) -> list[str]:

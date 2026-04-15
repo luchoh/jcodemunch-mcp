@@ -610,7 +610,7 @@ class TestContentHashing:
         symbols = parse_file(content, fname, "python")
         for s in symbols:
             assert s.content_hash, f"Symbol {s.name} missing content_hash"
-            assert len(s.content_hash) in (16, 64), "content_hash hex should be 16 (jCore) or 64 (SHA-256) chars"
+            assert len(s.content_hash) == 64, "content_hash hex should be 64-char SHA-256"
 
     def test_reparse_produces_same_hashes(self):
         content, fname = _fixture("python", "sample.py")
@@ -624,7 +624,7 @@ class TestContentHashing:
     def test_compute_content_hash_directly(self):
         data = b"hello world"
         h = compute_content_hash(data)
-        assert len(h) in (16, 64)
+        assert len(h) == 64
         # Same input -> same hash
         assert compute_content_hash(data) == h
         # Different input -> different hash

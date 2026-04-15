@@ -23,13 +23,6 @@ from typing import Optional
 from ..storage import IndexStore
 from ._utils import resolve_repo
 
-# Prefer compiled jCore backend when available
-try:
-    from _jmunch_core import compute_hotspots as _native_hotspots
-    _HAS_JCORE = True
-except ImportError:
-    _HAS_JCORE = False
-
 logger = logging.getLogger(__name__)
 
 
@@ -121,29 +114,7 @@ def get_hotspots(
             git_available = True
             file_churn = _get_file_churn(index.source_root, days)
 
-    # Use compiled jCore backend when available
-    if _HAS_JCORE:
-        # Pre-filter in Python to avoid copying ALL symbols into dicts
-        sym_dicts = []
-        for sym in index.symbols:
-            if sym.get("kind") not in ("function", "method"):
-                continue
-            cyc = sym.get("cyclomatic") or 0
-            if cyc < min_complexity:
-                continue
-            sym_dicts.append({
-                "id": sym.get("id", ""), "name": sym.get("name", ""),
-                "kind": sym.get("kind", ""), "file": sym.get("file", ""),
-                "line": sym.get("line") or 0,
-                "cyclomatic": cyc,
-                "max_nesting": sym.get("max_nesting") or 0,
-                "param_count": sym.get("param_count") or 0,
-            })
-        native_results = _native_hotspots(sym_dicts, file_churn, min_complexity, top_n)
-        top = [dict(r) for r in native_results]
-    else:
-        # Python fallback
-        # Normalise file paths: git outputs forward-slash paths; index may use either
+    # Normalise file paths: git outputs forward-slash paths; index may use either
         file_churn_norm = {k.replace("\\", "/"): v for k, v in file_churn.items()}
 
         candidates: list[dict] = []

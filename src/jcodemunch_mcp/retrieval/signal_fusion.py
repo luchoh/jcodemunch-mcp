@@ -24,13 +24,6 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# Prefer compiled jCore backend when available
-try:
-    from _jmunch_core import fuse as _native_fuse, ChannelResult as _NativeChannel
-    _HAS_JCORE = True
-except ImportError:
-    _HAS_JCORE = False
-
 # Default channel weights — tuned for code search.
 # Identity is weighted highest because an exact name hit is almost always
 # what the user wants; similarity second (semantic intent); lexical third
@@ -87,24 +80,6 @@ def fuse(
     Returns:
         List of ``FusedResult`` sorted by descending fused score.
     """
-    # Use compiled jCore backend when available
-    if _HAS_JCORE:
-        native_channels = [
-            _NativeChannel(ch.name, ch.ranked_ids, ch.weight)
-            for ch in channels
-        ]
-        native_results = _native_fuse(native_channels, smoothing=float(smoothing), weights=weights)
-        return [
-            FusedResult(
-                symbol_id=r.symbol_id,
-                score=r.score,
-                channel_contributions=dict(r.channel_contributions),
-                channel_ranks=dict(r.channel_ranks),
-            )
-            for r in native_results
-        ]
-
-    # Python fallback
     effective_weights = dict(DEFAULT_WEIGHTS)
     if weights:
         effective_weights.update(weights)

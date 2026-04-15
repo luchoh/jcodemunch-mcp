@@ -15,13 +15,6 @@ from .search_symbols import (
     BYTES_PER_TOKEN,
 )
 
-# Prefer compiled jCore backend when available
-try:
-    from _jmunch_core import pack_budget as _native_pack
-    _HAS_JCORE = True
-except ImportError:
-    _HAS_JCORE = False
-
 # Weight for PageRank when strategy="combined"
 _PR_WEIGHT = 100.0
 
@@ -49,47 +42,33 @@ def _pack_budget(
         (packed, total_tokens) where packed is list of
         (adjusted_score, sym, source, item_tokens).
     """
-    # Use compiled jCore backend when available
-    if _HAS_JCORE:
-        # Load tokens lazily: only fetch source for candidates that could
-        # plausibly fit in the budget (up to ~2x budget worth of tokens).
-        # This avoids reading source for hundreds of low-ranked symbols.
-        preloaded = []
-        cumulative_tokens = 0
-        cutoff = token_budget * 2
-        for score, sym in scored_items:
-            source, tokens = get_tokens(sym)
-            preloaded.append((score, sym, source, tokens))
-            cumulative_tokens += tokens
-            if cumulative_tokens >= cutoff:
-                break
-
-        items = [
-            {"id": sym.get("id", ""), "file": sym.get("file", ""), "score": score, "tokens": tokens}
-            for score, sym, source, tokens in preloaded
-        ]
-        native_packed, total = _native_pack(items, token_budget, diversity)
-
-        # Map native results back to expected format with source strings
-        source_map = {sym.get("id", ""): (sym, source) for _, sym, source, _ in preloaded}
-        packed = []
-        for item in native_packed:
-            sym, source = source_map.get(item.symbol_id, ({}, ""))
-            packed.append((item.adjusted_score, sym, source, item.tokens))
-        return packed, total
-
-    # Python fallback — basic greedy packing (no diversity optimization)
     packed: list[tuple[float, dict, str, int]] = []
     total_tokens = 0
+    file_counts: dict[str, int] = {}
 
     for score, sym in scored_items:
+        sym_file = sym.get("file", "")
+
+        # Diversity: enforce per-file cap
+        if diversity and file_counts.get(sym_file, 0) >= _FILE_GROUP_CAP:
+            continue
+
         source, item_tokens = get_tokens(sym)
         if item_tokens == 0:
             continue
         if total_tokens + item_tokens > token_budget:
             continue
-        packed.append((score, sym, source, item_tokens))
+
+        # Diversity: decay score for repeated files
+        if diversity:
+            n = file_counts.get(sym_file, 0)
+            adjusted = score * (_DIVERSITY_DECAY ** n)
+        else:
+            adjusted = score
+
+        packed.append((adjusted, sym, source, item_tokens))
         total_tokens += item_tokens
+        file_counts[sym_file] = file_counts.get(sym_file, 0) + 1
 
     return packed, total_tokens
 
