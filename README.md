@@ -47,6 +47,33 @@ Index once. Query cheaply. Keep moving.
 
 ---
 
+## Compact output — the second token axis (MUNCH)
+
+Retrieval decides **what** to send. MUNCH decides **how to pack it**.
+
+Every tool response can be emitted in a purpose-built compact wire format
+instead of verbose JSON. Path prefixes are interned to short handles,
+homogeneous lists of dicts pack into single-character-tagged CSV rows, and
+per-column types are preserved so the decode is lossless.
+
+```python
+# any tool call accepts format=
+find_references(identifier="get_user", format="auto")
+# auto  — emit compact if savings ≥ 15%, otherwise JSON
+# compact — always compact
+# json    — never compact (back-compat passthrough)
+```
+
+Benchmark (v1.56.0): median **45.5%** bytes saved across 6 representative
+tools, peaks at **55.4%** on graph and outline responses. Full spec in
+[SPEC_MUNCH.md](SPEC_MUNCH.md); numbers and harness in
+[TOKEN_SAVINGS.md](TOKEN_SAVINGS.md).
+
+Encoding savings stack on top of retrieval savings — every byte off the wire
+is a byte the agent doesn't pay to read.
+
+---
+
 # jCodeMunch MCP
 
 ### Structured code retrieval for serious AI agents

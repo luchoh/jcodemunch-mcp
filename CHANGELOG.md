@@ -2,6 +2,12 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.57.0] — 2026-04-17
+
+### Added
+- **MUNCH spec + benchmark harness (phase 4)** — full on-wire format spec shipped as [SPEC_MUNCH.md](SPEC_MUNCH.md) so third-party clients and alternate MCP servers can decode MUNCH payloads without depending on the Python reference decoder. New A/B encoding benchmark at `munch-bench/munch_bench/encoding_bench.py` (`python -m munch_bench.encoding_bench`) runs representative fixtures through the dispatcher and reports JSON bytes, compact bytes, savings %, and token-saved estimate. Current numbers: **median 45.5% / max 55.4%** across six tools covering both tier-1 and generic-fallback paths — exceeds the PRD's ≥30% median / ≥50% graph-tool targets.
+- **README compact-output section** and updated `TOKEN_SAVINGS.md` with the dual-axis framing (retrieval + encoding compose independently).
+
 ## [1.56.0] — 2026-04-17
 
 ### Changed
