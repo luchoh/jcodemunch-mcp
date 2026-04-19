@@ -2,6 +2,17 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.63.1] — 2026-04-19
+
+Hotfix — `get_hotspots` (and therefore `get_repo_health`, which aggregates
+it) crashed with `UnboundLocalError: local variable 'top' referenced before
+assignment` on any repo where `source_root` wasn't a git worktree — most
+notably `index_repo` extracts living in the cache dir, where this is the
+common case, not the exception.
+
+### Fixed
+- **`get_hotspots` no-git path de-indented (closes crash in `get_repo_health`).** The candidate-building block was nested inside the `if rc_check == 0:` branch, so when `git rev-parse --git-dir` failed (no `.git` reachable from `source_root`), the block never ran and `top` was never bound. The existing test suite masked this because `tmp_path` on the maintainer's machine nests inside the project's own git worktree, so `rev-parse` accidentally walked up and succeeded. Block is now de-indented to function-body level; a regression test monkeypatches `_run_git` to force the no-git path regardless of where tmp_path lives.
+
 ## [1.63.0] — 2026-04-19
 
 Python import resolution — fixes under-resolution on layouts where the

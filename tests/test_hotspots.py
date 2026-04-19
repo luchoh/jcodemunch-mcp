@@ -96,6 +96,24 @@ class TestGetHotspots:
         assert "_meta" in result
         assert "timing_ms" in result["_meta"]
 
+    def test_no_git_does_not_crash(self, tmp_path, monkeypatch):
+        """Regression: when source_root has no reachable .git (e.g. an
+        index_repo extract in a cache dir), the candidate-building block
+        must still run. Previously mis-indented under `if rc_check == 0`,
+        which left `top` unbound and raised UnboundLocalError."""
+        repo, store = _build_repo(tmp_path)
+        # Force _run_git to always report "no .git" regardless of tmp_path
+        # happening to nest inside the maintainer's git worktree.
+        from jcodemunch_mcp.tools import get_hotspots as mod
+        monkeypatch.setattr(mod, "_run_git", lambda *a, **kw: (128, "", "not a git repo"))
+        result = get_hotspots(repo=repo, min_complexity=1, storage_path=store)
+        assert "error" not in result
+        assert result["git_available"] is False
+        assert isinstance(result["hotspots"], list)
+        # Symbols should still rank by complexity alone (churn=0)
+        for h in result["hotspots"]:
+            assert h["churn"] == 0
+
     def test_git_available_field(self, tmp_path):
         repo, store = _build_repo(tmp_path)
         result = get_hotspots(repo=repo, storage_path=store)
