@@ -91,21 +91,48 @@ class TestPerSessionIsolation:
         self._install_session(monkeypatch, s2)
         assert server_mod._effective_profile() == "core"
 
-    def test_lru_cap_evicts_oldest(self, monkeypatch):
-        cap = server_mod._SESSION_TIER_CAP
-        for i in range(cap + 10):
+    def test_many_sessions_do_not_exceed_memory(self, monkeypatch):
+        """Pre-v1.62 this test exercised LRU-cap eviction. After audit
+        findings F2 + F3 we dropped the cap entirely and switched to
+        weak-reference tracking: entries disappear when the session object
+        is collected, so there's no need to evict live ones."""
+        class _S:
+            pass
 
-            class _S:
-                pass
-
+        for i in range(500):
             s = _S()
             s.session_id = f"s-{i}"
             self._install_session(monkeypatch, s)
             server_mod._set_session_tier("core")
 
-        assert len(server_mod._session_tier_overrides) <= cap
-        assert "s-0" not in server_mod._session_tier_overrides
-        assert f"s-{cap + 9}" in server_mod._session_tier_overrides
+        # Every unique session_id stayed (no silent eviction of live state).
+        assert len(server_mod._session_tier_overrides) == 500
+        assert "s-0" in server_mod._session_tier_overrides
+        assert "s-499" in server_mod._session_tier_overrides
+
+    def test_gc_does_not_leak_tier_to_reused_id(self, monkeypatch):
+        """Audit F2: `id()` can be reused after GC. A freed session's tier
+        override must NOT be inherited by a later session allocated at the
+        same address."""
+        import gc
+
+        class _S:
+            pass
+
+        s1 = _S()
+        self._install_session(monkeypatch, s1)
+        server_mod._set_session_tier("core")
+        assert server_mod._effective_profile() == "core"
+
+        # Release the first session and force collection so its weakref
+        # finalizer runs and drops the tier override.
+        del s1
+        gc.collect()
+
+        s2 = _S()
+        self._install_session(monkeypatch, s2)
+        # Fresh session must land on config default, not the carryover tier.
+        assert server_mod._effective_profile() != "core"
 
 
 class TestEmitToolsListChanged:

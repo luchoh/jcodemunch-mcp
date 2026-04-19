@@ -133,28 +133,68 @@ _ALWAYS_PRESENT_TOOLS: frozenset[str] = frozenset({"set_tool_tier", "announce_mo
 
 # --- Runtime session tier state -------------------------------------------- #
 import threading
-from collections import OrderedDict
-from typing import Hashable
+import uuid
+import weakref
+from typing import Any, Hashable
 
 # Tier overrides are keyed by MCP session identity so concurrent HTTP clients
 # don't clobber each other. Stdio and tests have no active session; they land
 # on the "__default__" sentinel, preserving pre-v1.61 single-session semantics.
-# LRU-capped to bound memory under long-running servers with session churn.
-_SESSION_TIER_CAP = 256
+#
+# Earlier versions used an LRU-capped OrderedDict keyed by id(session). That
+# had two bugs (audit findings F2 + F3):
+#   F2: id() is reused after GC, so a freed session's tier could be inherited
+#       by a freshly-allocated replacement at the same address.
+#   F3: LRU eviction silently reset a live session's tier to config default.
+# Both are fixed by keying on a per-session UUID tracked in a WeakKeyDict;
+# entries disappear exactly when the session object is collected, and there
+# is no cap to evict from.
 _SESSION_TIER_DEFAULT_KEY: Hashable = "__default__"
-_session_tier_overrides: "OrderedDict[Hashable, str]" = OrderedDict()
+_session_tier_overrides: dict[Hashable, str] = {}
 _session_tier_lock = threading.Lock()
+
+# Maps a live session object → a stable uuid used as the dict key above.
+# WeakKeyDictionary drops entries automatically when the session is freed,
+# and the matching override entry is purged lazily via the finalizer below.
+_session_uuid: "weakref.WeakKeyDictionary[Any, str]" = weakref.WeakKeyDictionary()
 
 
 def _session_key() -> Hashable:
-    """Return a stable hashable key for the active MCP session."""
+    """Return a stable hashable key for the active MCP session.
+
+    Priority:
+      1. `session.session_id` if the MCP library exposes one (HTTP transport).
+      2. A per-process UUID tracked in a WeakKeyDictionary keyed by the
+         session object. Survives for the lifetime of the session and
+         disappears with it — no id() reuse after GC (F2), no LRU eviction
+         required (F3).
+      3. The default sentinel when there is no active session (stdio/tests).
+    """
     session = _get_mcp_session()
     if session is None:
         return _SESSION_TIER_DEFAULT_KEY
     sid = getattr(session, "session_id", None)
     if isinstance(sid, str) and sid:
         return sid
-    return id(session)
+    try:
+        existing = _session_uuid.get(session)
+        if existing is not None:
+            return existing
+        new_uuid = uuid.uuid4().hex
+        _session_uuid[session] = new_uuid
+        # When the session is GC'd, remove its override entry too so the
+        # dict doesn't grow unbounded with stale keys.
+        weakref.finalize(session, _drop_override, new_uuid)
+        return new_uuid
+    except TypeError:
+        # Session object isn't weakref-able — fall back to id(). Known to
+        # be risky after GC but there's no safer hashable available here.
+        return id(session)
+
+
+def _drop_override(key: Hashable) -> None:
+    with _session_tier_lock:
+        _session_tier_overrides.pop(key, None)
 
 
 def _set_session_tier(tier: str | None) -> None:
@@ -165,15 +205,13 @@ def _set_session_tier(tier: str | None) -> None:
             _session_tier_overrides.pop(key, None)
             return
         _session_tier_overrides[key] = tier
-        _session_tier_overrides.move_to_end(key)
-        while len(_session_tier_overrides) > _SESSION_TIER_CAP:
-            _session_tier_overrides.popitem(last=False)
 
 
 def _reset_session_tiers() -> None:
     """Clear every session's tier override. Test helper."""
     with _session_tier_lock:
         _session_tier_overrides.clear()
+    _session_uuid.clear()
 
 
 def _effective_profile() -> str:
