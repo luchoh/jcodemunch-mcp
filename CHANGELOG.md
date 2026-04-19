@@ -2,6 +2,14 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.60.1] — 2026-04-18
+
+### Changed
+- **`adaptive_tiering: true` + HTTP transport now refuses to start (#248).** Previously emitted a startup WARNING. Process-global tier state leaks across concurrent HTTP clients — one client's `plan_turn(model=...)` flip silently changes the tool surface for every other concurrent client on the same server. That's a misconfiguration, not a heads-up condition. The server now logs an ERROR and aborts via `HttpAdaptiveTieringError` (a `SystemExit` subclass) on both `sse` and `streamable-http` transports. Stdio is unaffected. Existing installs running `adaptive_tiering: false` (the default) see zero change. A per-session tier-state fix that would make HTTP + adaptive_tiering actually safe remains tracked for a future release.
+
+### Fixed
+- **`model_tier_map` substring match now picks the longest-matching key (#249).** Previously depended on dict iteration order — a config with both `"claude": "standard"` and `"claude-haiku": "core"` could resolve `claude-haiku-4-5` to either tier depending on config write order. Longest-match-wins makes specific entries beat broader ones regardless of order. Three regression tests cover both insertion orders and the broader-key-still-matches-non-haiku case.
+
 ## [1.60.0] — 2026-04-18
 
 ### Added
