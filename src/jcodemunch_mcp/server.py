@@ -72,7 +72,7 @@ _CANONICAL_TOOL_NAMES: tuple[str, ...] = (
     "get_symbol_diff", "embed_repo",
     # Utilities
     "get_session_stats", "get_session_context", "get_session_snapshot", "plan_turn", "register_edit", "invalidate_cache", "test_summarizer",
-    "audit_agent_config",
+    "audit_agent_config", "get_watch_status",
     # Runtime tier switching
     "set_tool_tier", "announce_model",
     # Composite retrieval
@@ -119,7 +119,7 @@ _TOOL_TIER_STANDARD: frozenset[str] = _TOOL_TIER_CORE | frozenset({
     "get_cross_repo_map", "get_tectonic_map", "get_signal_chains",
     "render_diagram", "get_project_intel",
     # Utilities
-    "invalidate_cache",
+    "invalidate_cache", "get_watch_status",
 })
 
 # full = everything (no filter applied)
@@ -774,6 +774,16 @@ def _build_tools_list() -> list[Tool]:
                 "type": "object",
                 "properties": {}
             }
+        ),
+        Tool(
+            name="get_watch_status",
+            description=(
+                "Report watch-all daemon coverage: every locally-indexed repo, "
+                "each repo's staleness / reindex-in-progress state, and the "
+                "OS-level service status. Call before relying on index freshness "
+                "when you suspect files may have changed since the last index."
+            ),
+            inputSchema={"type": "object", "properties": {}},
         ),
         Tool(
             name="resolve_repo",
@@ -2950,6 +2960,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             from .tools.list_repos import list_repos
             result = await asyncio.to_thread(
                 functools.partial(list_repos, storage_path=storage_path)
+            )
+        elif name == "get_watch_status":
+            from .tools.get_watch_status import get_watch_status
+            result = await asyncio.to_thread(
+                functools.partial(get_watch_status, storage_path=storage_path)
             )
         elif name == "resolve_repo":
             from .tools.resolve_repo import resolve_repo
@@ -5199,6 +5214,41 @@ def main(argv: Optional[list[str]] = None):
     )
     _add_common_args(wc_parser)
 
+    # --- watch-all ---
+    wa_parser = subparsers.add_parser(
+        "watch-all",
+        help="Auto-discover every locally-indexed repo and auto-reindex on change",
+    )
+    wa_parser.add_argument(
+        "--debounce", type=int, default=None, metavar="MS",
+        help="Debounce interval in ms (default: from config)",
+    )
+    wa_parser.add_argument(
+        "--rediscover-interval", type=float, default=None, metavar="SECONDS",
+        help="Re-scan the index registry for new/removed repos every N seconds (default: 30)",
+    )
+    wa_parser.add_argument("--no-ai-summaries", action="store_true",
+        help="Disable AI-generated summaries during re-indexing")
+    wa_parser.add_argument("--follow-symlinks", action="store_true",
+        help="Include symlinked files in indexing")
+    wa_parser.add_argument("--extra-ignore", nargs="*",
+        help="Additional gitignore-style patterns to exclude")
+    _add_common_args(wa_parser)
+
+    # --- watch-install / watch-uninstall / watch-status ---
+    _add_common_args(subparsers.add_parser(
+        "watch-install",
+        help="Install watch-all as a login service (systemd/launchd/Task Scheduler)",
+    ))
+    _add_common_args(subparsers.add_parser(
+        "watch-uninstall",
+        help="Remove the installed watch-all login service",
+    ))
+    _add_common_args(subparsers.add_parser(
+        "watch-status",
+        help="Print watch-all service state + per-repo reindex status",
+    ))
+
     # --- download-model ---
     dm_parser = subparsers.add_parser(
         "download-model",
@@ -5249,7 +5299,7 @@ def main(argv: Optional[list[str]] = None):
     if any(arg in top_level_flags for arg in raw_argv):
         args = parser.parse_args(raw_argv)
     else:
-        known_commands = {"serve", "watch", "hook-event", "hook-pretooluse", "hook-posttooluse", "hook-precompact", "hook-taskcomplete", "hook-subagent-start", "watch-claude", "config", "index", "index-file", "claude-md", "init", "install-pack", "download-model"}
+        known_commands = {"serve", "watch", "hook-event", "hook-pretooluse", "hook-posttooluse", "hook-precompact", "hook-taskcomplete", "hook-subagent-start", "watch-claude", "watch-all", "watch-install", "watch-uninstall", "watch-status", "config", "index", "index-file", "claude-md", "init", "install-pack", "download-model"}
         has_subcommand = any(arg in known_commands for arg in raw_argv if not arg.startswith("-"))
         if not has_subcommand:
             raw_argv = ["serve"] + list(raw_argv)
@@ -5378,6 +5428,39 @@ def main(argv: Optional[list[str]] = None):
         from .hook_event import handle_hook_event
 
         handle_hook_event(event_type=args.event_type)
+    elif args.command == "watch-all":
+        from .watch_all import watch_all, DEFAULT_REDISCOVER_INTERVAL_S
+        use_ai = not args.no_ai_summaries and _default_use_ai_summaries()
+        asyncio.run(
+            watch_all(
+                debounce_ms=args.debounce or int(os.environ.get("JCODEMUNCH_WATCH_DEBOUNCE_MS", "200")),
+                use_ai_summaries=use_ai,
+                storage_path=os.environ.get("CODE_INDEX_PATH"),
+                extra_ignore_patterns=args.extra_ignore,
+                follow_symlinks=args.follow_symlinks,
+                rediscover_interval_s=args.rediscover_interval or DEFAULT_REDISCOVER_INTERVAL_S,
+            )
+        )
+    elif args.command == "watch-install":
+        import json as _json
+        from .service_installer import install_service, InstallerError
+        try:
+            print(_json.dumps(install_service(), indent=2))
+        except InstallerError as exc:
+            print(f"watch-install failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif args.command == "watch-uninstall":
+        import json as _json
+        from .service_installer import uninstall_service, InstallerError
+        try:
+            print(_json.dumps(uninstall_service(), indent=2))
+        except InstallerError as exc:
+            print(f"watch-uninstall failed: {exc}", file=sys.stderr)
+            sys.exit(1)
+    elif args.command == "watch-status":
+        import json as _json
+        from .tools.get_watch_status import get_watch_status
+        print(_json.dumps(get_watch_status(storage_path=os.environ.get("CODE_INDEX_PATH")), indent=2))
     elif args.command == "watch-claude":
         from .watcher import watch_claude_worktrees
 

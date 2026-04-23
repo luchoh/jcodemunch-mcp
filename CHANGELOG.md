@@ -2,6 +2,24 @@
 
 All notable changes to jcodemunch-mcp are documented here.
 
+## [1.73.0] — 2026-04-23
+
+### Added
+- **`watch-all` subcommand + login-service installer.** Auto-discovers every
+  locally-indexed repo via the existing `IndexStore.list_repos()` registry and
+  keeps all of them fresh with one `WatcherManager`. Rediscovers on a
+  configurable interval (default 30s) so repos added to the registry later are
+  picked up without a restart. Skips GitHub repos (empty `source_root`) and
+  repos whose source_root has been deleted.
+- **`watch-install` / `watch-uninstall` / `watch-status` subcommands.** Install
+  the watcher as a login service on all three platforms from one command:
+  systemd user unit (Linux), launchd agent (macOS), Task Scheduler task
+  (Windows). Service shells `sys.executable -m jcodemunch_mcp watch-all`, so it
+  inherits the active virtualenv and skips any per-event `uvx` overhead.
+- **`get_watch_status` MCP tool.** Surfaces per-repo staleness, in-progress
+  reindexes, and service health to agents — callable before acting on anything
+  that assumes a fresh index.
+
 ## [1.72.0] — 2026-04-21
 
 Correctness + reach release: fixes six tier-1 MUNCH encoders that had shipped

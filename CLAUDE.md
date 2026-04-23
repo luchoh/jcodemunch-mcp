@@ -1,7 +1,7 @@
 # jcodemunch-mcp — Project Brief
 
 ## Current State
-- **Version:** 1.72.0 (published to PyPI)
+- **Version:** 1.73.0 (published to PyPI)
 - **INDEX_VERSION:** 9
 - **Tests:** 3530 passed, 7 skipped
 - **Python:** >=3.10
@@ -87,6 +87,10 @@ src/jcodemunch_mcp/
 | `init` | One-command onboarding: detect MCP clients, write config, install CLAUDE.md policy, hooks, index |
 | `watch <paths>` | File watcher — auto-reindex on change |
 | `watch-claude` | Auto-discover and watch Claude Code worktrees |
+| `watch-all` | Auto-discover **every** locally-indexed repo and keep it fresh; rediscovers on interval |
+| `watch-install` | Install `watch-all` as a login service (systemd / launchd / Task Scheduler) |
+| `watch-uninstall` | Remove the installed `watch-all` login service |
+| `watch-status` | Print service state + per-repo reindex status (also exposed as MCP tool `get_watch_status`) |
 | `hook-event create\|remove` | Record a worktree lifecycle event (called by Claude Code hooks) |
 | `index [target]` | Index a local folder (default: `.`) or GitHub repo (`owner/repo`). One command, no init required |
 | `index-file <path>` | Re-index a single file within an existing indexed folder (used by PostToolUse hooks) |
